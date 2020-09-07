@@ -25,7 +25,7 @@ def run_cmd(*args, verbose=True):
     if cmd_output.returncode != 0:
         if verbose:
             print(f"Received error {cmd_output.returncode}")
-        sys.exit(cmd_output.returncode)
+        raise Exception(f"Exit status: {cmd_output.returncode}")
     return cmd_output
 
 
@@ -46,10 +46,25 @@ if __name__ == '__main__':
         
     [filename_no_ext] = posts_re.findall(filename)
     
-    run_cmd("nbdev_nb2md", filepath)
+    images_directory = f"{filename_no_ext}_files/"
+
+    with open(filepath, 'rb') as f:
+        orig = f.read()
+    try:
+        run_cmd(
+            "nbdev_nb2md",
+            filepath,
+            # f"--img_path=./images/{images_directory}",
+            # f"--dest=./_posts",
+            f"--jekyll=True",
+        )
+    finally:
+        with open(filepath, 'wb') as f:
+            # nbdev_nb2md messes around with the images, which I don't want.
+            # restore the file to its original state.
+            f.write(orig)
 
     # Move the image files into place
-    images_directory = f"{filename_no_ext}_files/"
     run_cmd("rm", "-rf", f"images/{images_directory}")
     run_cmd("mv", images_directory, "images/")
 

@@ -1,11 +1,22 @@
-# Posting to github pages using jupyter notebooks
+---
+title: Posting to github pages using jupyter notebooks
 
 
+
+
+
+---
+
+<div class="codecell" markdown="1">
+<div class="input_area" markdown="1">
 
 ```python
 for x in range(10):
     print(x)
 ```
+
+</div>
+<div class="output_area" markdown="1">
 
     0
     1
@@ -19,10 +30,16 @@ for x in range(10):
     9
 
 
+</div>
+
+</div>
+
 Here is some more mardown.
 
 And here is some code that generates an SVG:
 
+<div class="codecell" markdown="1">
+<div class="input_area" markdown="1">
 
 ```python
 import pygraphviz as pgv
@@ -48,11 +65,20 @@ G.add_edge('confounder', 'f')
 draw(G)
 ```
 
+</div>
+<div class="output_area" markdown="1">
+
 
 ![svg](/images/2020-09-06-example-post_files/output_2_0.svg)
 
 
+</div>
+
+</div>
+
 Here is some code that generates latex from sympy:
+<div class="codecell" markdown="1">
+<div class="input_area" markdown="1">
 
 ```python
 import sympy
@@ -60,11 +86,18 @@ x, y = sympy.symbols('x y')
 sympy.expand((x + y) ** 20)
 ```
 
+</div>
+<div class="output_area" markdown="1">
+
 
 
 
 $\displaystyle x^{20} + 20 x^{19} y + 190 x^{18} y^{2} + 1140 x^{17} y^{3} + 4845 x^{16} y^{4} + 15504 x^{15} y^{5} + 38760 x^{14} y^{6} + 77520 x^{13} y^{7} + 125970 x^{12} y^{8} + 167960 x^{11} y^{9} + 184756 x^{10} y^{10} + 167960 x^{9} y^{11} + 125970 x^{8} y^{12} + 77520 x^{7} y^{13} + 38760 x^{6} y^{14} + 15504 x^{5} y^{15} + 4845 x^{4} y^{16} + 1140 x^{3} y^{17} + 190 x^{2} y^{18} + 20 x y^{19} + y^{20}$
 
 
+
+</div>
+
+</div>
 
 And the same thing, but hidden:
