@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="316pt" height="188pt" viewBox="0.00 0.00 316.00 188.00">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 184)">
+<polygon fill="white" stroke="transparent" points="-4,4 -4,-184 312,-184 312,4 -4,4"/>
+<!-- a -->
+<g id="node1" class="node">
+<title>a</title>
+<ellipse fill="none" stroke="black" cx="63" cy="-162" rx="27" ry="18"/>
+<text text-anchor="middle" x="63" y="-158.3" font-family="Times,serif" font-size="14.00">a</text>
+</g>
+<!-- b -->
+<g id="node2" class="node">
+<title>b</title>
+<ellipse fill="none" stroke="black" cx="27" cy="-90" rx="27" ry="18"/>
+<text text-anchor="middle" x="27" y="-86.3" font-family="Times,serif" font-size="14.00">b</text>
+</g>
+<!-- a&#45;&gt;b -->
+<g id="edge1" class="edge">
+<title>a-&gt;b</title>
+<path fill="none" stroke="black" d="M54.65,-144.76C50.29,-136.28 44.85,-125.71 39.96,-116.2"/>
+<polygon fill="black" stroke="black" points="42.99,-114.44 35.3,-107.15 36.77,-117.64 42.99,-114.44"/>
+</g>
+<!-- c -->
+<g id="node3" class="node">
+<title>c</title>
+<ellipse fill="none" stroke="black" cx="99" cy="-90" rx="27" ry="18"/>
+<text text-anchor="middle" x="99" y="-86.3" font-family="Times,serif" font-size="14.00">c</text>
+</g>
+<!-- a&#45;&gt;c -->
+<g id="edge2" class="edge">
+<title>a-&gt;c</title>
+<path fill="none" stroke="black" d="M71.35,-144.76C75.71,-136.28 81.15,-125.71 86.04,-116.2"/>
+<polygon fill="black" stroke="black" points="89.23,-117.64 90.7,-107.15 83.01,-114.44 89.23,-117.64"/>
+</g>
+<!-- d -->
+<g id="node4" class="node">
+<title>d</title>
+<ellipse fill="none" stroke="black" cx="63" cy="-18" rx="27" ry="18"/>
+<text text-anchor="middle" x="63" y="-14.3" font-family="Times,serif" font-size="14.00">d</text>
+</g>
+<!-- b&#45;&gt;d -->
+<g id="edge3" class="edge">
+<title>b-&gt;d</title>
+<path fill="none" stroke="black" d="M35.35,-72.76C39.71,-64.28 45.15,-53.71 50.04,-44.2"/>
+<polygon fill="black" stroke="black" points="53.23,-45.64 54.7,-35.15 47.01,-42.44 53.23,-45.64"/>
+</g>
+<!-- c&#45;&gt;d -->
+<g id="edge4" class="edge">
+<title>c-&gt;d</title>
+<path fill="none" stroke="black" d="M90.65,-72.76C86.29,-64.28 80.85,-53.71 75.96,-44.2"/>
+<polygon fill="black" stroke="black" points="78.99,-42.44 71.3,-35.15 72.77,-45.64 78.99,-42.44"/>
+</g>
+<!-- e -->
+<g id="node5" class="node">
+<title>e</title>
+<ellipse fill="none" stroke="black" cx="171" cy="-90" rx="27" ry="18"/>
+<text text-anchor="middle" x="171" y="-86.3" font-family="Times,serif" font-size="14.00">e</text>
+</g>
+<!-- f -->
+<g id="node6" class="node">
+<title>f</title>
+<ellipse fill="none" stroke="black" cx="226" cy="-18" rx="27" ry="18"/>
+<text text-anchor="middle" x="226" y="-14.3" font-family="Times,serif" font-size="14.00">f</text>
+</g>
+<!-- e&#45;&gt;f -->
+<g id="edge5" class="edge">
+<title>e-&gt;f</title>
+<path fill="none" stroke="black" d="M182.93,-73.81C190.21,-64.55 199.66,-52.52 207.85,-42.09"/>
+<polygon fill="black" stroke="black" points="210.66,-44.18 214.09,-34.16 205.16,-39.86 210.66,-44.18"/>
+</g>
+<!-- h -->
+<g id="node7" class="node">
+<title>h</title>
+<ellipse fill="none" stroke="black" cx="281" cy="-90" rx="27" ry="18"/>
+<text text-anchor="middle" x="281" y="-86.3" font-family="Times,serif" font-size="14.00">h</text>
+</g>
+<!-- h&#45;&gt;f -->
+<g id="edge6" class="edge">
+<title>h-&gt;f</title>
+<path fill="none" stroke="black" d="M269.07,-73.81C261.79,-64.55 252.34,-52.52 244.15,-42.09"/>
+<polygon fill="black" stroke="black" points="246.84,-39.86 237.91,-34.16 241.34,-44.18 246.84,-39.86"/>
+</g>
+<!-- confounder -->
+<g id="node8" class="node">
+<title>confounder</title>
+<ellipse fill="none" stroke="black" cx="253" cy="-162" rx="50.89" ry="18"/>
+<text text-anchor="middle" x="253" y="-158.3" font-family="Times,serif" font-size="14.00">confounder</text>
+</g>
+<!-- confounder&#45;&gt;f -->
+<g id="edge7" class="edge">
+<title>confounder-&gt;f</title>
+<path fill="none" stroke="black" d="M249.74,-143.87C245.14,-119.67 236.69,-75.21 231.21,-46.39"/>
+<polygon fill="black" stroke="black" points="234.57,-45.36 229.27,-36.19 227.7,-46.67 234.57,-45.36"/>
+</g>
+<!-- confounder&#45;&gt;h -->
+<g id="edge8" class="edge">
+<title>confounder-&gt;h</title>
+<path fill="none" stroke="black" d="M259.78,-144.05C263.01,-135.97 266.95,-126.12 270.56,-117.11"/>
+<polygon fill="black" stroke="black" points="273.82,-118.37 274.28,-107.79 267.32,-115.77 273.82,-118.37"/>
+</g>
+</g>
+</svg>
