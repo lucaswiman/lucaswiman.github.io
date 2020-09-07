@@ -7,6 +7,15 @@ title: Posting to github pages using jupyter notebooks
 
 ---
 
+
+Based on https://www.fast.ai/2020/01/20/nb2md/
+
+Here is an image that is copy/pasted into the cell:
+![image.png](notebooks/2020-09-06-example-post_files/att_00000.png)
+
+Here is some LaTeX: $\alpha(x^y) = z$
+
+Here is some code:
 <div class="codecell" markdown="1">
 <div class="input_area" markdown="1">
 
@@ -69,7 +78,7 @@ draw(G)
 <div class="output_area" markdown="1">
 
 
-![svg](/images/2020-09-06-example-post_files/output_2_0.svg)
+![svg](/images/2020-09-06-example-post_files/output_3_0.svg)
 
 
 </div>
