@@ -1,5 +1,5 @@
 ---
-title: Posting to github pages using jupyter notebooks
+title: Notes on how this blog is generated
 
 
 
@@ -9,6 +9,13 @@ title: Posting to github pages using jupyter notebooks
 
 
 Based on https://www.fast.ai/2020/01/20/nb2md/
+
+Notes:
+1. It's very important that the title be in a single cell at the beginning. _only_ the `# My title` part will be included in the processed markdown file.
+2. This uses nbdev and the file `make-post.py`. The command to make a post from a jupyter notebook is:
+```bash
+./make-post.py notebooks/YYYY-MM-DD-post-title.ipynb
+```
 
 Here is an image that is copy/pasted into the cell:
 ![image.png](notebooks/2020-09-06-example-post_files/att_00000.png)

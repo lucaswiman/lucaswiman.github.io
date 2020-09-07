@@ -71,7 +71,7 @@ if __name__ == '__main__':
     print("Fixing image links")
     with open(f"./{filename_no_ext}.md", 'r') as f:
         contents = f.read()
-    breakpoint()
+
     # For png images included as data-uris it seems to put the path wrong.
     # I guess this is a bug in nbdev.
     fixed, n0 = re.subn(rf'(!.*]\()notebooks/({re.escape(filename_no_ext)}_files/)', r'\1/images/\2', contents)
