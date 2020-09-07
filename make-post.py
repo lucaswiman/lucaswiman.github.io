@@ -70,18 +70,18 @@ if __name__ == '__main__':
 
     print("Fixing image links")
     with open(f"./{filename_no_ext}.md", 'r') as f:
-        contents = f.read()
+        contents = orig_contents = f.read()
 
     # For png images included as data-uris it seems to put the path wrong.
     # I guess this is a bug in nbdev.
-    fixed, n0 = re.subn(rf'(!.*]\()notebooks/({re.escape(filename_no_ext)}_files/)', r'\1/images/\2', contents)
+    contents, n0 = re.subn(rf'(!.*]\()notebooks/({re.escape(filename_no_ext)}_files/)', r'\1/images/\2', contents)
     # This is ordinary munging for jekyll, since we're moving the images directory for this
     # post to the images/ directory.
-    fixed, n1 = re.subn(rf'(!.*]\()({re.escape(filename_no_ext)}_files/)', r'\1/images/\2', contents)
+    contents, n1 = re.subn(rf'(!.*]\()({re.escape(filename_no_ext)}_files/)', r'\1/images/\2', contents)
     print(f"Fixed {n0 + n1} links.")
 
     loc = f"./_posts/{filename_no_ext}.md"
     print(f"Writing file to {loc}")
     with open(loc, 'w') as f:
-        f.write(fixed)
+        f.write(contents)
     run_cmd("rm", f"./{filename_no_ext}.md")

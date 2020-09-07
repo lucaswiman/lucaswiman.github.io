@@ -18,7 +18,7 @@ Notes:
 ```
 
 Here is an image that is copy/pasted into the cell:
-![image.png](notebooks/2020-09-06-example-post_files/att_00000.png)
+![image.png](/images/2020-09-06-example-post_files/att_00000.png)
 
 Here is some LaTeX: $\alpha(x^y) = z$
 
