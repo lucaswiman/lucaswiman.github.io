@@ -43,7 +43,7 @@ for x in range(10):
 
 </div>
 
-Here is some more mardown.
+Here is some more markdown.
 
 And here is some code that generates an SVG:
 
