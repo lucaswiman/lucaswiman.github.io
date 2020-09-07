@@ -49,7 +49,7 @@ draw(G)
 ```
 
 
-![svg](Example post_files/output_2_0.svg)
+![svg](2020-09-06-example-post_files/output_2_0.svg)
 
 
 Here is some code that generates latex from sympy:
