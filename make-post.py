@@ -15,10 +15,6 @@ from pathlib import Path
 import sys
 
 
-# for f in fileinput.input(inplace=True):
-#     print(re.sub(r'^(!.*]\()(\w+_files/)', r'\1/images/\2', f), end='')
-
-
 def run_cmd(*args, verbose=True):
     """
     Runs the given command arguments and exits with its exit status if nonzero.
@@ -49,17 +45,22 @@ if __name__ == '__main__':
         sys.exit(1)
         
     [filename_no_ext] = posts_re.findall(filename)
-    breakpoint()
     
     run_cmd("nbdev_nb2md", filepath)
 
     # Move the image files into place
-    run_cmd("mv", f"{filename_no_ext}_files/", "images/")
+    images_directory = f"{filename_no_ext}_files/"
+    run_cmd("rm", "-rf", f"images/{images_directory}")
+    run_cmd("mv", images_directory, "images/")
 
-    # Fix the image links.
+    print("Fixing image links")
     with open(f"./{filename_no_ext}.md", 'r') as f:
         contents = f.read()
-    fixed = re.sub(r'^(!.*]\()({re.escape(filename_no_ext)}_files/)', r'\1/images/\2', contents)
-    with open(f"./_posts/{filename_no_ext}.md", 'w') as f:
+    fixed, n = re.subn(rf'(!.*]\()({re.escape(filename_no_ext)}_files/)', r'\1/images/\2', contents)
+    print(f"Fixed {n} links.")
+
+    loc = f"./_posts/{filename_no_ext}.md"
+    print(f"Writing file to {loc}")
+    with open(loc, 'w') as f:
         f.write(fixed)
     run_cmd("rm", f"./{filename_no_ext}.md")
