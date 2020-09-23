@@ -10,11 +10,11 @@ title: How to retrieve a file in git by its object hash
 
 In certain circumstances, you may want to retrieve a file in [git](https://en.wikipedia.org/wiki/Git) by some short identifier.
 
-An example of this would be if you have some relevant file which is useful in reproducing a computation, say for debugging or regression testing. As another use case, for compliance, you might want to record and easily retrieve which version of a contract template a user saw, but have the version field only change when the _contents_ of the html file changes. (And not when unrelated files change as with a commit hash.)
+For example, you have some relevant file which is useful in reproducing a computation, say for debugging or regression testing. Or, for compliance, you might want to record and easily retrieve which version of a contract template a user saw, but have the version field only change when the _contents_ of the html file changes. (And not when unrelated files change as with a commit hash.)
 
 One simple way to achieve this is to use the Git _object hash_. This is the hash of file contents that git uses to store the underlying file.
 
-Now let's create an empty git repository, with two files `foo` and `bar` whose contents are `foo` and `bar` respectively:
+Now let's create an empty git repository, with one file `foo` with contents `foo\n`:
 <div class="codecell" markdown="1">
 <div class="input_area" markdown="1">
 
@@ -25,7 +25,7 @@ Now let's create an empty git repository, with two files `foo` and `bar` whose c
 </div>
 <div class="output_area" markdown="1">
 
-    Initialized empty Git repository in /private/var/folders/0x/v2lbxd814bv46ngy5zhtsf700000gn/T/tmpc9qdxxjl/.git/
+    Initialized empty Git repository in /private/var/folders/0x/v2lbxd814bv46ngy5zhtsf700000gn/T/tmppll0ayzo/.git/
 
 
 </div>
@@ -36,7 +36,6 @@ Now let's create an empty git repository, with two files `foo` and `bar` whose c
 
 ```python
 !echo foo > foo
-!echo bar > bar
 !git add .
 !git commit -m 'init'
 ```
@@ -44,9 +43,8 @@ Now let's create an empty git repository, with two files `foo` and `bar` whose c
 </div>
 <div class="output_area" markdown="1">
 
-    [master (root-commit) 465eb8f] init
-     2 files changed, 2 insertions(+)
-     create mode 100644 bar
+    [master (root-commit) cd0d56c] init
+     1 file changed, 1 insertion(+)
      create mode 100644 foo
 
 
@@ -83,6 +81,47 @@ We can then retrieve the contents in a single command with only that hash with t
 </div>
 <div class="output_area" markdown="1">
 
+    foo
+
+
+</div>
+
+</div>
+
+Note that other file contents get added to the git tree when you call `hash-object`:
+<div class="codecell" markdown="1">
+<div class="input_area" markdown="1">
+
+```python
+!git cat-file -p `echo aslkfmlaskm | git hash-object -w --stdin`
+```
+
+</div>
+<div class="output_area" markdown="1">
+
+    aslkfmlaskm
+
+
+</div>
+
+</div>
+
+We can then update `foo` to some other contents, and still retrieve the original content using the same object hash:
+<div class="codecell" markdown="1">
+<div class="input_area" markdown="1">
+
+```python
+!echo bar > foo
+!git add .
+!git commit -m 'Update foo to bar, as one does.'
+!git cat-file -p 257cc5642cb1a054f08cc83f2d943e56fd3ebe99
+```
+
+</div>
+<div class="output_area" markdown="1">
+
+    [master 9ca289a] Update foo to bar, as one does.
+     1 file changed, 1 insertion(+), 1 deletion(-)
     foo
 
 
