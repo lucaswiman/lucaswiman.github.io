@@ -52,7 +52,7 @@ Now let's create an empty git repository, with one file `foo` with contents `foo
 
 </div>
 
-How are these files stored internally in Git? The files are content-addressable by the object hash. We can copute the object hash using the [`git-hash-object` command](https://git-scm.com/docs/git-hash-object):
+How are these files stored internally in Git? The files are content-addressable by the object hash. We can compute the object hash using the [`git-hash-object` command](https://git-scm.com/docs/git-hash-object):
 <div class="codecell" markdown="1">
 <div class="input_area" markdown="1">
 
@@ -70,7 +70,7 @@ How are these files stored internally in Git? The files are content-addressable 
 
 </div>
 
-We can then retrieve the contents in a single command with only that hash with the `git cat-file` command:
+We can then retrieve the contents in a single command with only that hash using `git-cat-file`:
 <div class="codecell" markdown="1">
 <div class="input_area" markdown="1">
 
