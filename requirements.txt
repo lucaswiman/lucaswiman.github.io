@@ -37,7 +37,7 @@ nbdev==1.0.11
 nbformat==5.0.7
 networkx==2.5
 notebook==6.1.3
-numpy==1.19.1
+numpy==1.21.0
 optlang==1.4.4
 packaging==20.4
 pandas==1.1.1
