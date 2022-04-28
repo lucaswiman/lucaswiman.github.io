@@ -20,7 +20,7 @@ It seems like this is evidence that the coin is not fair, but it's not obvious w
 $$ P(H|D) = {P(D | H) \cdot P(H) \over P(D)} $$
 {% endraw %}
 
-Here $D$ is our data, that it came up heads 20 times. $H$ is, hrm, $p={1\over 2}$? So then we can compute the likelihood in the usual way:
+Here $D$ is our data, that it came up heads 15 times. $H$ is, hrm, $p={1\over 2}$? So then we can compute the likelihood in the usual way:
 {% raw %}
 $$ P\left(D \; \middle | \; p=\frac{1}{2}\right)=p^{15} (1 - p)^5 {20 \choose 15} = \left({1 \over 2} \right)^{20} {20 \choose 15}\approx 0.015 $$
 {% endraw %}
@@ -170,7 +170,7 @@ p, N = symbols("p N")
 likelihood = sympy.binomial(20, 15) * p** 15 * (1-p)**5
 P_D = integrate(prior * likelihood_D, (p, 0, 1))
 p1 = plot(prior, xlim=[0,1], ylim=[0, 5], show=False, line_color='b')
-p2 = plot(likelihood_D * prior / P_D, show=False, line_color='g')
+p2 = plot(likelihood * prior / P_D, show=False, line_color='g')
 p1.append(p2[0])
 p1.show()
 ```
