@@ -33,27 +33,27 @@ The existence of this limit can be shown by [Bernoulli's inequality](https://en.
 
 To show (2), we have:
  
-\begin{aligned}
+$$\begin{aligned}
 \exp(ab) & = \lim_{x\to\infty} \left(1 + {ab \over x}\right)^x \\
          & = \lim_{q\to\infty} \left(1 + {a \over q}\right)^{b\cdot q} \quad \left(\textrm{substitute } q=x/b\right) \\
          & = \left(\lim_{q\to\infty} \left(1 + {a \over q}\right)^q\right)^b \\
          & = \left(\exp(a)\right)^b \\
-\end{aligned}
+\end{aligned}$$
 
 For (3):
 
-\begin{aligned}
+$$\begin{aligned}
 \exp(a+b) & = \lim_{x\to\infty} \left(1 + {a+b \over x}\right)^x \\
           & = \lim_{q\to\infty} \left(1 + {1 \over q}\right)^{q\cdot (a+b)} \quad \left(\textrm{substitute } q={x\over a+b}\right) \\
           & = \left(\lim_{q\to\infty} \left(1 + {1 \over q}\right)^q\right)^{a+b} \\
           & = \left(\exp(1)\right)^{a+b} \\
           & = \exp(1)^a\cdot \exp(1)^b \\
           & = \exp(a)\cdot \exp(b) \\
-\end{aligned}
+\end{aligned}$$
 
 For (4), we have:
 
-\begin{aligned}
+$$\begin{aligned}
 {d \over dx} \exp(x) &= \lim_{\delta\to 0} \frac{\exp(x+\delta) - \exp(x)}{\delta} \\
                      &= \lim_{\delta\to 0} \frac{\exp(x)\exp(\delta) - \exp(x)}{\delta} \\
                      &= \exp(x)\left(\lim_{\delta\to 0} \frac{\exp(\delta) - 1}{\delta} \right) \\
@@ -62,7 +62,7 @@ For (4), we have:
                      &= \exp(x)\left(\lim_{\delta\to 0} \frac{(1 + \delta) - 1}{\delta} \right) \\
                      &= \exp(x)\left(\lim_{\delta\to 0} \frac{\delta}{\delta} \right)\\
                      &= \exp(x) \\
-\end{aligned}
+\end{aligned}$$
 
 ## Poisson (as a limit of Binomial)
 
@@ -113,7 +113,7 @@ $$ P(X=k) = {n \choose k} \left({\lambda \over n}\right)^k \left(1 - {\lambda \o
 
 Taking the limit as $n\to\infty$:
 
-\begin{aligned}
+$$ \begin{aligned}
 P_\infty(X=k) &= {\lambda^k \over k!} \cdot \lim_{n\to\infty} {n! \over (n-k)!} \left({1 \over n}\right)^k \left(1 - {\lambda \over n}\right)^{n-k} \\
               &= {\lambda^k \over k!} \cdot \lim_{n\to\infty} {n! \over n^k(n-k)!}  \left(1 - {\lambda \over n}\right)^n\left(1 - {\lambda \over n}\right)^{-k} \\
               & \textrm{Canceling like terms, we end up with }k\textrm{ terms of size }O(n)\textrm{ on top and bottom, so the first term is 1. Thus:} \\
@@ -121,7 +121,7 @@ P_\infty(X=k) &= {\lambda^k \over k!} \cdot \lim_{n\to\infty} {n! \over (n-k)!} 
               & \textrm{Since }k\textrm{ is fixed. The second term is 1:} \\
               &= {\lambda^k \over k!} \cdot \lim_{n\to\infty} \left(1 - {\lambda \over n}\right)^n \\
               &= {\lambda^k e^{-\lambda} \over k!} \\
-\end{aligned}
+\end{aligned} $$
 That is the standard PMF of the Poisson distribution. In our example above, we have $\lambda=40$:
 <div class="codecell" markdown="1">
 <div class="input_area" markdown="1">
