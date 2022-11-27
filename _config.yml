@@ -41,3 +41,8 @@ kramdown:
   auto_ids: true
   hard_wrap: false
   syntax_highlighter: rouge
+
+mastodon:
+  instance: hachyderm.io
+  username: objectObject
+  # <a rel="me" href="https://hachyderm.io/@objectObject">Mastodon</a>
