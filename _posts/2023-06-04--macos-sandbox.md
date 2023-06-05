@@ -10,15 +10,21 @@ title: Sandboxing code on MacOS
 
 This post covers some experimentation I did with the MacOS `sandbox-exec` command. The goal is to be able to run and evaluate Python libraries while significantly reducing the risk of a supply chain attack installing malware on my computer or exfiltrating data from my computer.
 
+## Bash Script
+
+The bash script I wrote that inspired this post can be found [here](https://gist.github.com/lucaswiman/1cec6584015149f0df1bb24c875a0709). Please comment with improvements/suggestions!
+
+## Basics
+
 
 The DSL used by `sandbox-exec` must start with `(version 1)`, seemingly the only version in existence as of 2023.
 
 The rules consist of parenthesis-enclosed rules of the form `([deny/allow] [permissions] [predicates])`. Later rules have higher precedence.
 
-## Permissions
+### Permissions
 
 The most important permissions are:
-* `default`: Matches any permission, e.g.
+* `default`: Matches any permission, e.g. `(allow default)` or `(deny default)`. The latter is probably useful for running untrusted code (e.g. a new pypi library).
 * `file*`:
   * `file-read-metadata`, `file-read-data`, ...
   * `file-write-data`, ...
@@ -34,7 +40,7 @@ Permissions support globbing, e.g. `file*` grants `file-read-data` and `file-wri
 The most complete listing can be found in [this reverse engineered guide](https://reverse.put.as/wp-content/uploads/2011/09/Apple-Sandbox-Guide-v1.0.pdf)
 
 
-## Predicates
+### Predicates
 
 These are enclosed in parentheses:
 * `(literal "some literal")`
@@ -43,7 +49,7 @@ These are enclosed in parentheses:
 * `([remote/local] ip "host:port")`, e.g. `(remote ip "*:80")`. Annoyingly, the host must be either `*` or `localhost`, which makes it impossible to only allow particular hosts. There exist firewalling applications which can do that for particular processes, but alas not supported here.
 * `(require-any [predicates])` or `(require-all [predicates])` disjunction/conjunction of predicates.
 
-## Basic examples:
+## Examples:
 
 
 
@@ -300,10 +306,6 @@ Most importantly, I cannot use it for work without obtaining a commercial licens
 * Playing sound was from [this post](https://mybyways.com/blog/creating-a-macos-sandbox-to-run-kodi).
 * See also the existing rulesets in `/usr/share/sandbox`, which includes some useful utility methods.
 
-## Bash Script
-
-The bash script I wrote that inspired this post can be found [here](https://gist.github.com/lucaswiman/1cec6584015149f0df1bb24c875a0709). Please comment with improvements/suggestions!
-
 ## Environment
 
-All of the above commands were run on a 2019 Intel Macbook pro running Macos Ventura 13.4. I don't know if they work on 
+All of the above commands were run on a 2019 Intel Macbook pro running Macos Ventura 13.4. I don't know if they work on ARM Macs, though I presume so.
