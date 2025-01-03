@@ -1,0 +1,6 @@
+jupyter
+nbdev
+numpy
+matplotlib
+sympy
+PyYAML>=6
