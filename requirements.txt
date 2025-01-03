@@ -15,7 +15,6 @@ decorator==4.4.2
 defusedxml==0.6.0
 entrypoints==0.3
 fastcore==1.0.4
-fastscript==1.0.0
 fonttools==4.39.4
 handcalcs==0.8.1
 hypothesis==5.33.0
