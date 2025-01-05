@@ -3,9 +3,9 @@
 To learn more about transformers and LLMs, I tried reproducing the results from [Transformers Can Do Arithmetic with the Right Embeddings](https://arxiv.org/abs/2405.17399), an interesting paper on altering LLM architecture to allow more easily learning basic arithmetic.
 
 The idea in the paper is to train a transformer on formulaic prompts like "27+34=61", with the goal of being able to generalize to Out Of Distribution (OOD) numbers. To achieve this, the authors use an approach which they call "abacus encoding":
-:
+
 1. Numbers are written with the least significant digit first rather than last (i.e. "one hundred and twenty-three plus four hundred and fifty-six" is written 321+654).
-2. Digits are always tokenized as separate tokens. This is definitely _not_ the case with models like OpenAI's GPT series, with a substantial number of tokens in the language consisting of 2-digit or 3-digit numbers. This is presumably onpositionale reason otherwise quite intelligent LLMs are fairly bad at arithmetic: imagine having to learn _from context_ that `765` consists of the sequence of digits 7 6 5, or more famously [that `11` consists of 1 1](https://community.openai.com/t/why-9-11-is-larger-than-9-9-incredible/869824). It's remarkable they can do any kind of reasoning about numbers at all.
+2. Digits are always tokenized as separate tokens. This is definitely _not_ the case with models like OpenAI's GPT series, with a substantial number of tokens in the language consisting of 2-digit or 3-digit numbers. This is presumably one reason otherwise quite intelligent LLMs are fairly bad at arithmetic: imagine having to learn _from context_ that `765` consists of the sequence of digits 7 6 5, or more famously [that `11` consists of 1 1](https://community.openai.com/t/why-9-11-is-larger-than-9-9-incredible/869824). It's remarkable they can do any kind of reasoning about numbers at all.
 3. There is a special positional encoding for numbers, a collection of 100 learned weight vectors recording the position of the ith digit in a number. E.g. our 321+654 example would get encode as the sequence:
    * (Learned embedding of token "3") + (Learned abacus encoding vector at position 1)
    * (embedding of "2") + (abacus encoding at position 2)
@@ -36,7 +36,7 @@ They found that the models using abacus encoding were able to generalize to out-
 
 ## Reproducing the results
 
-One very cool thing about this research is that it's extremely modest in terms of GPU hardware required, and could probably even train on a CPU. The models are mostly quite small, and I was able to (partly) reproduce the addition results on my 8GB Nvidia 4060 GPU.
+One cool thing about this paper is that it's fairly modest in terms of GPU hardware required, and could probably even train on a CPU. The models are mostly quite small, and I was able to (partly) reproduce the addition results on my 8GB Nvidia 4060 GPU.
 
 ![image.png]((/images/2025-01-02-teaching-transformers-arithmetic_files/paper-hyperparameters.png)
 
@@ -314,7 +314,7 @@ These are the fundamental insight of transformer architecture, consisting of thr
 Here `qkv_proj` is three square matrices "on top of each other", which take in `d_model=1024` vectors and output three concatenated vectors (query, key and value). When we "project" `qkv = self.qkv_proj(x)`, we end up with something that has one `3*d_model` vector for each (batch, sequence_position) pair, which gets reshaped and "unbound" into (Q,K,V) tensors. For a given batch and head index, that's three matrices of dimension `(seq_len, head_dim)`, and the flash attention does the following:
 * Compute `Q@K^T` to get a matrix of shape `(seq_len, seq_len)`.
 * Transform it with scaling and "softmax" (see below) to get _attention weights_. You can think of these as how much each token should attend to every other in the `d_head=64` dimensional subspace of the "values" space for that layer.
-* Multiply those weights matrix by the "values" projection of that 64-d subspace to get a `head_dim` vector for each head.
+* Multiply that weights matrix by the "values" projection of that 64-d subspace to get a `head_dim` vector for each head.
 * Apply "dropout" and "causal masking":
   * Dropout is a way to randomly exclude a subset (e.g. 20%) of weights from the gradient on each update to prevent overfitting the data and undergeneralizing. The NN needs to represent the same data in multiple compressed ways to survive dropout.
   * Causal masking forces attention weights to be zero for all "future" tokens further in the sequence, roughly reflecting the intuition that the model is reading the data in order.
@@ -527,7 +527,7 @@ list(zip(dataset.tokenizer.decode(instance["input_ids"].tolist()), instance["lab
 
 
 
-
+```
     [('0', -100),
      ('2', -100),
      ('2', -100),
@@ -546,7 +546,7 @@ list(zip(dataset.tokenizer.decode(instance["input_ids"].tolist()), instance["lab
      ('$', -100),
      ('$', -100),
      ('$', -100)]
-
+```
 
 
 ## Train!
