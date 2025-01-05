@@ -989,6 +989,10 @@ def evaluate_digit_combinations(model, n_digits, seed=None, num_recurrences=16, 
 ```
 
 
+## Looping over different numbers of recurrences
+
+### 16 loops
+
 ```python
 evaluate_digit_combinations(model, n_digits=40, seed=42, num_recurrences=16, n_batch=100)
 ```
@@ -997,25 +1001,11 @@ evaluate_digit_combinations(model, n_digits=40, seed=42, num_recurrences=16, n_b
 ![png](/images/2025-01-02-teaching-transformers-arithmetic_files/2025-01-02-teaching-transformers-arithmetic_35_0.png)
 
 
-    Completed 40x40 square
     Current average accuracy: 0.613
     Best performance so far: 1.000
     Worst performance so far: 0.040
 
-
-
-
-
-    array([[0.98, 1.  , 1.  , ..., 0.14, 0.12, 0.12],
-           [1.  , 1.  , 1.  , ..., 0.17, 0.15, 0.11],
-           [1.  , 1.  , 1.  , ..., 0.17, 0.14, 0.08],
-           ...,
-           [0.14, 0.19, 0.16, ..., 0.08, 0.08, 0.11],
-           [0.16, 0.1 , 0.09, ..., 0.15, 0.12, 0.1 ],
-           [0.14, 0.1 , 0.11, ..., 0.19, 0.13, 0.09]], shape=(40, 40))
-
-
-
+### 1 loop
 
 ```python
 evaluate_digit_combinations(model, n_digits=40, seed=42, num_recurrences=1, n_batch=100)
@@ -1024,26 +1014,23 @@ evaluate_digit_combinations(model, n_digits=40, seed=42, num_recurrences=1, n_ba
 
 ![png](/images/2025-01-02-teaching-transformers-arithmetic_files/2025-01-02-teaching-transformers-arithmetic_36_0.png)
 
-
-    Completed 40x40 square
     Current average accuracy: 0.000
     Best performance so far: 0.240
     Worst performance so far: 0.000
 
+### 2 loops
+```python
+evaluate_digit_combinations(model, n_digits=40, seed=42, num_recurrences=2, n_batch=100)
+```
 
 
+![png](2025-01-02-teaching-transformers-arithmetic_files/2025-01-02-teaching-transformers-arithmetic_39_0.png)
 
+    Current average accuracy: 0.320
+    Best performance so far: 1.000
+    Worst performance so far: 0.000
 
-    array([[0.24, 0.03, 0.  , ..., 0.  , 0.  , 0.  ],
-           [0.03, 0.  , 0.01, ..., 0.  , 0.  , 0.  ],
-           [0.  , 0.  , 0.  , ..., 0.  , 0.  , 0.  ],
-           ...,
-           [0.  , 0.  , 0.  , ..., 0.  , 0.  , 0.  ],
-           [0.  , 0.  , 0.  , ..., 0.  , 0.  , 0.  ],
-           [0.  , 0.  , 0.  , ..., 0.  , 0.  , 0.  ]], shape=(40, 40))
-
-
-
+### 8 loops
 
 ```python
 evaluate_digit_combinations(model, n_digits=40, seed=42, num_recurrences=8, n_batch=100)
@@ -1053,24 +1040,12 @@ evaluate_digit_combinations(model, n_digits=40, seed=42, num_recurrences=8, n_ba
 ![png](/images/2025-01-02-teaching-transformers-arithmetic_files/2025-01-02-teaching-transformers-arithmetic_37_0.png)
 
 
-    Completed 40x40 square
     Current average accuracy: 0.611
     Best performance so far: 1.000
     Worst performance so far: 0.050
 
 
-
-
-
-    array([[1.  , 1.  , 1.  , ..., 0.1 , 0.16, 0.06],
-           [1.  , 1.  , 1.  , ..., 0.13, 0.14, 0.12],
-           [1.  , 1.  , 1.  , ..., 0.17, 0.13, 0.11],
-           ...,
-           [0.14, 0.26, 0.1 , ..., 0.12, 0.16, 0.16],
-           [0.14, 0.14, 0.19, ..., 0.15, 0.18, 0.14],
-           [0.15, 0.06, 0.14, ..., 0.07, 0.1 , 0.12]], shape=(40, 40))
-
-
+### 32 loops
 
 
 ```python
@@ -1080,58 +1055,10 @@ evaluate_digit_combinations(model, n_digits=40, seed=42, num_recurrences=32, n_b
 
 ![png](/images/2025-01-02-teaching-transformers-arithmetic_files/2025-01-02-teaching-transformers-arithmetic_38_0.png)
 
-
-    Completed 40x40 square
     Current average accuracy: 0.613
     Best performance so far: 1.000
     Worst performance so far: 0.050
 
-
-
-
-
-    array([[0.99, 1.  , 1.  , ..., 0.19, 0.17, 0.13],
-           [1.  , 0.99, 1.  , ..., 0.1 , 0.12, 0.05],
-           [1.  , 1.  , 1.  , ..., 0.19, 0.12, 0.09],
-           ...,
-           [0.12, 0.16, 0.18, ..., 0.17, 0.13, 0.08],
-           [0.13, 0.18, 0.13, ..., 0.21, 0.12, 0.1 ],
-           [0.11, 0.1 , 0.11, ..., 0.08, 0.14, 0.1 ]], shape=(40, 40))
-
-
-
-
-```python
-evaluate_digit_combinations(model, n_digits=40, seed=42, num_recurrences=2, n_batch=100)
-```
-
-
-![png](2025-01-02-teaching-transformers-arithmetic_files/2025-01-02-teaching-transformers-arithmetic_39_0.png)
-
-
-    Completed 40x40 square
-    Current average accuracy: 0.320
-    Best performance so far: 1.000
-    Worst performance so far: 0.000
-
-
-
-
-
-    array([[0.92, 0.92, 0.93, ..., 0.12, 0.12, 0.07],
-           [0.91, 0.8 , 0.89, ..., 0.16, 0.06, 0.08],
-           [0.93, 0.86, 0.79, ..., 0.15, 0.05, 0.1 ],
-           ...,
-           [0.14, 0.07, 0.11, ..., 0.03, 0.03, 0.02],
-           [0.1 , 0.14, 0.05, ..., 0.01, 0.  , 0.04],
-           [0.04, 0.05, 0.04, ..., 0.02, 0.01, 0.01]], shape=(40, 40))
-
-
-
-
-```python
-torch.cuda.empty_cache()
-```
 
 ## Overall notes
 
