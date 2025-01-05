@@ -139,7 +139,7 @@ class AbacusPositionalEncoder(nn.Module):
             longest_number = max(len(span) for span in spans)
             if training:
                 # Choose a random offset to allow for generalization. Note that since
-                # I created and embedding value for the entire context length, this can
+                # I created an embedding value for the entire context length, this can
                 # in principle generalize more than in the paper. Bug? Feature?
                 offset = random.randint(
                     0,
@@ -839,15 +839,6 @@ Now we can examine out-of-distribution numbers (more than 20 digits) to see how 
 
 
 ```python
-# device = torch.device("cuda")  # must use cuda because of flash-attn
-# assert torch.cuda.is_available()
-
-# model = ArithmeticTransformer(recurrent_block_size=8, num_recurrences=2)
-# model.load_state_dict(torch.load('./model_50000.pt', weights_only=True))
-# model.load_state_dict(torch.load('./run_50k.pt', weights_only=True))
-# data = torch.load('./runs/20241226_1605/model_final.pt', weights_only=True)
-# model.load_state_dict(torch.load('./runs/20241226_1605/model_final.pt', weights_only=True))
-# model = model.to(device)
 import random
 import torch
 
