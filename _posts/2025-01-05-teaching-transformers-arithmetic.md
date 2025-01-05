@@ -32,13 +32,13 @@ Since the problem instances are themselves random (i.e. _cannot be predicted_), 
 
 They found that the models using abacus encoding were able to generalize to out-of-distribution numbers with high 90's accuracy. Most interestingly, they found that despite having a smaller number of parameters, the looped transformers performed somewhat better than one deep transformer, with two loops of eigth layers being the most performant among "effective depth 16" transformers. They were able to extend these results to some other operations, suggesting that abacus encoding may be helpful for some kinds of general algorithmic tasks.
 
-![image.png](/images/2025-01-02-teaching-transformers-arithmetic_files/paper-results.png)
+![image.png](/images/2025-01-05-teaching-transformers-arithmetic_files/paper-results.png)
 
 ## Reproducing the results
 
 One cool thing about this paper is that it's fairly modest in terms of GPU hardware required, and could probably even train on a CPU. The models are mostly quite small, and I was able to (partly) reproduce the addition results on my 8GB Nvidia 4060 GPU.
 
-![image.png]((/images/2025-01-02-teaching-transformers-arithmetic_files/paper-hyperparameters.png)
+![image.png]((/images/2025-01-05-teaching-transformers-arithmetic_files/paper-hyperparameters.png)
 
 First, let's define the tokenizer:
 
@@ -351,7 +351,7 @@ GELU is a function with a very similar-looking graph, but has some nonzero gradi
 Both functions give some threshold "nonlinearity", and a gradient that allows "muting" some nodes in the network. ReLU is like a hard switch where once it gets to 0. No gradients "from below" will have an effect on a zeroed out ReLU activation, while GELU provides a way of turning nodes "back on" since it has nonzero gradients below 0. In pytorch, neither function has any learnable parameters.
 #### Graph of GELU:
 
-![image.png]((/images/2025-01-02-teaching-transformers-arithmetic_files/gelu-graph.png)
+![image.png]((/images/2025-01-05-teaching-transformers-arithmetic_files/gelu-graph.png)
 
 # Loop It!
 
@@ -809,7 +809,7 @@ display(Image('training_losses.png'))
     ..........
 
 
-![png](/images/2025-01-02-teaching-transformers-arithmetic_files/2025-01-02-teaching-transformers-arithmetic_29_1.png)
+![png](/images/2025-01-05-teaching-transformers-arithmetic_files/2025-01-05-teaching-transformers-arithmetic_29_1.png)
 
 That loss graph doesn't look very good. Some batches had very, very low loss, but even after a lot of examples, some batches had high loss, within a few orders of magnitude of where we started. I suspect this is caused by two things:
 
@@ -998,7 +998,7 @@ evaluate_digit_combinations(model, n_digits=40, seed=42, num_recurrences=16, n_b
 ```
 
 
-![png](/images/2025-01-02-teaching-transformers-arithmetic_files/2025-01-02-teaching-transformers-arithmetic_35_0.png)
+![png](/images/2025-01-05-teaching-transformers-arithmetic_files/2025-01-05-teaching-transformers-arithmetic_35_0.png)
 
 
     Current average accuracy: 0.613
@@ -1012,7 +1012,7 @@ evaluate_digit_combinations(model, n_digits=40, seed=42, num_recurrences=1, n_ba
 ```
 
 
-![png](/images/2025-01-02-teaching-transformers-arithmetic_files/2025-01-02-teaching-transformers-arithmetic_36_0.png)
+![png](/images/2025-01-05-teaching-transformers-arithmetic_files/2025-01-05-teaching-transformers-arithmetic_36_0.png)
 
     Current average accuracy: 0.000
     Best performance so far: 0.240
@@ -1024,7 +1024,7 @@ evaluate_digit_combinations(model, n_digits=40, seed=42, num_recurrences=2, n_ba
 ```
 
 
-![png](/images/2025-01-02-teaching-transformers-arithmetic_files/2025-01-02-teaching-transformers-arithmetic_39_0.png)
+![png](/images/2025-01-05-teaching-transformers-arithmetic_files/2025-01-05-teaching-transformers-arithmetic_39_0.png)
 
     Current average accuracy: 0.320
     Best performance so far: 1.000
@@ -1037,7 +1037,7 @@ evaluate_digit_combinations(model, n_digits=40, seed=42, num_recurrences=8, n_ba
 ```
 
 
-![png](/images/2025-01-02-teaching-transformers-arithmetic_files/2025-01-02-teaching-transformers-arithmetic_37_0.png)
+![png](/images/2025-01-05-teaching-transformers-arithmetic_files/2025-01-05-teaching-transformers-arithmetic_37_0.png)
 
 
     Current average accuracy: 0.611
@@ -1053,7 +1053,7 @@ evaluate_digit_combinations(model, n_digits=40, seed=42, num_recurrences=32, n_b
 ```
 
 
-![png](/images/2025-01-02-teaching-transformers-arithmetic_files/2025-01-02-teaching-transformers-arithmetic_38_0.png)
+![png](/images/2025-01-05-teaching-transformers-arithmetic_files/2025-01-05-teaching-transformers-arithmetic_38_0.png)
 
     Current average accuracy: 0.613
     Best performance so far: 1.000
