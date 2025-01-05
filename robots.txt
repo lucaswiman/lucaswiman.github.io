@@ -1,5 +1,2 @@
-User-agent: ia_archiver
-Allow: /health-notes/
-
 User-agent: *
 Disallow: /health-notes/
