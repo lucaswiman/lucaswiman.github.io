@@ -1024,7 +1024,7 @@ evaluate_digit_combinations(model, n_digits=40, seed=42, num_recurrences=2, n_ba
 ```
 
 
-![png](2025-01-02-teaching-transformers-arithmetic_files/2025-01-02-teaching-transformers-arithmetic_39_0.png)
+![png](/images/2025-01-02-teaching-transformers-arithmetic_files/2025-01-02-teaching-transformers-arithmetic_39_0.png)
 
     Current average accuracy: 0.320
     Best performance so far: 1.000
