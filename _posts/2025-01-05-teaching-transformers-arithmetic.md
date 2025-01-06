@@ -353,7 +353,7 @@ GELU is a function with a very similar-looking graph, but has some nonzero gradi
 Both functions give some threshold "nonlinearity", and a gradient that allows "muting" some nodes in the network. ReLU is like a hard switch where once it gets to 0. No gradients "from below" will have an effect on a zeroed out ReLU activation, while GELU provides a way of turning nodes "back on" since it has nonzero gradients below 0. In pytorch, neither function has any learnable parameters.
 #### Graph of GELU:
 
-![image.png]((/images/2025-01-05-teaching-transformers-arithmetic_files/gelu-graph.png)
+![image.png](/images/2025-01-05-teaching-transformers-arithmetic_files/gelu-graph.png)
 
 # Loop It!
 
