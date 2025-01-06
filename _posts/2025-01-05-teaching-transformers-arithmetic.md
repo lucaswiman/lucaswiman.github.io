@@ -38,7 +38,7 @@ They found that the models using abacus encoding were able to generalize to out-
 
 One cool thing about this paper is that it's fairly modest in terms of GPU hardware required, and could probably even train on a CPU. The models are mostly quite small, and I was able to (partly) reproduce the addition results on my 8GB Nvidia 4060 GPU.
 
-![image.png]((/images/2025-01-05-teaching-transformers-arithmetic_files/paper-hyperparameters.png)
+![image.png](/images/2025-01-05-teaching-transformers-arithmetic_files/paper-hyperparameters.png)
 
 First, let's define the tokenizer:
 
