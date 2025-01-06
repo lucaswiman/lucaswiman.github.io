@@ -1,8 +1,10 @@
 # Notes on Teaching Transformers Arithmetic
 
-To learn more about transformers and LLMs, I tried reproducing the results from [Transformers Can Do Arithmetic with the Right Embeddings](https://arxiv.org/abs/2405.17399), an interesting paper on altering LLM architecture to allow more easily learning basic arithmetic.
+I've been wanting to learn more about LLMs and transformers, so I tried reproducing the results from [Transformers Can Do Arithmetic with the Right Embeddings](https://arxiv.org/abs/2405.17399), an interesting paper on altering LLM architecture to allow more easily learning basic arithmetic.
 
-The idea in the paper is to train a transformer on formulaic prompts like "27+34=61", with the goal of being able to generalize to Out Of Distribution (OOD) numbers. To achieve this, the authors use an approach which they call "abacus encoding":
+This post contains an implementation of the core ideas of the paper, and my notes on both that implementation and core concepts of the paper. The goal is something like"the post to get a past version of myself with exactly the holes in my knowledge up to speed on the things I learned." Your mileage will probably vary.
+
+Anyway, the idea in the paper is to train a transformer on formulaic prompts like "27+34=61", with the goal of being able to generalize to Out Of Distribution (OOD) numbers. To achieve this, the authors use an approach which they call "abacus encoding":
 
 1. Numbers are written with the least significant digit first rather than last (i.e. "one hundred and twenty-three plus four hundred and fifty-six" is written 321+654).
 2. Digits are always tokenized as separate tokens. This is definitely _not_ the case with models like OpenAI's GPT series, with a substantial number of tokens in the language consisting of 2-digit or 3-digit numbers. This is presumably one reason otherwise quite intelligent LLMs are fairly bad at arithmetic: imagine having to learn _from context_ that `765` consists of the sequence of digits 7 6 5, or more famously [that `11` consists of 1 1](https://community.openai.com/t/why-9-11-is-larger-than-9-9-incredible/869824). It's remarkable they can do any kind of reasoning about numbers at all.
