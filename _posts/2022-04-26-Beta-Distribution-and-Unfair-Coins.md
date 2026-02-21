@@ -1,12 +1,6 @@
 ---
-title: Unfair Coins and Bayes' Theorem
-
-
-
-
-
+title: "Unfair Coins and Bayes' Theorem"
 ---
-
 
 This post works through an example that I struggled with early on in learning Bayesian statistics. I think some of the notation below is nonstandard, but hopefully the ideas are clear.
 
@@ -32,16 +26,17 @@ At that point, we can compute $P(D)=\int_0^1 B_0(p)\cdot {20 \choose 15} \cdot p
 
 A simple way to express a prior this might be that I examined the coin, and it feels like an ordinary coin. That suggests that if it's not fair, it's probably not _too_ unfair, so we could make the prior "it could be anything between $p=0.4$ and $p=0.6$, with other values being basically impossible. This lets us define a prior piecewise as:
 
+{% raw %}
 $$ B_c(p) = \begin{cases} 
       0 & 0\leq p < 0.4 \\
       5 & 0.4\leq p\leq 0.6 \\
       0 & p>  0.6
    \end{cases}
 $$
+{% endraw %}
 
 Then we can compute $P(\textrm{heads}=N)$ relative to this prior, e.g. using sympy:
-<div class="codecell" markdown="1">
-<div class="input_area" markdown="1">
+
 
 ```python
 import sympy
@@ -56,16 +51,9 @@ P_D = integrate(B_c * likelihood_D, (p, 0, 1))
 display(P_D)
 ```
 
-</div>
-<div class="output_area" markdown="1">
-
 
 $\displaystyle 0.0225965086622404$
 
-
-</div>
-
-</div>
 
 Furthermore, the _output_ of a Bayesian update isn't a single number, it's _another_ distribution that's based on both our prior distribution and the data. Let's call the posterior distribution $B_D(x)$. It's given by Bayes' formula, as you'd hope:
 {% raw %}
@@ -75,15 +63,11 @@ $$ B_D(x) = \frac{P(D|p=x)\cdot B_c(x)}{P(D)} $$
 As you'd hope, if we integrate it on $[0,1]$, we get $1$. This is checked numerically below, though you can also check this yourself by noting that $P(D)$ is a constant, and pulling it out of the integral.
 
 Numerical check:
-<div class="codecell" markdown="1">
-<div class="input_area" markdown="1">
+
 
 ```python
 integrate(likelihood_D * B_c / P_D, (p, 0, 1))
 ```
-
-</div>
-<div class="output_area" markdown="1">
 
 
 
@@ -92,13 +76,8 @@ $\displaystyle 0.999999999999983$
 
 
 
-</div>
-
-</div>
-
 We can graph the prior (blue) and the posterior (green) distributions to get a feel for what the update looks like:
-<div class="codecell" markdown="1">
-<div class="input_area" markdown="1">
+
 
 ```python
 %matplotlib inline
@@ -108,16 +87,11 @@ p1.append(p2[0])
 p1.show()
 ```
 
-</div>
-<div class="output_area" markdown="1">
 
+    
+![png](/images/2022-04-26-Beta-Distribution-and-Unfair-Coins_files/2022-04-26-Beta-Distribution-and-Unfair-Coins_6_0.png)
+    
 
-![png](/images/2022-04-26-Beta-Distribution-and-Unfair-Coins_files/output_5_0.png)
-
-
-</div>
-
-</div>
 
 The shape of the graph indicates that we assign a much higher credence to the coin favoring heads than before. But we also assign a probability of $0$ to the value that seems to match the data best $p={15\over 20}$. Is that correct? Generally speaking, we don't want to assign a probability of literally $0$ unless we think it's literally impossible.
 
@@ -130,8 +104,7 @@ We could fix this with some more complicated prior. What kind of properties woul
 As it turns out, there is a distribution called the [Beta Distribution](https://en.wikipedia.org/wiki/Beta_distribution) which satisfies all of these. Usually written $\textrm{Beta}(H, T)$, though it's important to remember, that this is a _distribution_ of possible probability values, i.e. a function $[0,1]\to\mathbb{R}_{\geq 0}$. It's the unique distribution which has all the nice properties you'd want for a binomial likelihood function (called a ["conjugage prior" to the likelihood](https://en.wikipedia.org/wiki/Conjugate_prior)). Other likelihoods have different conjugate priors. To pick out a prior that applies for your domain, you can either start with some existing data, or play around with an interactive tool until you have a distribution that matches your best guess. 
 
 A good prior to start out with if you are going to be able to collect a bunch of data is an _uninformative prior_ like the uniform $\textrm{Beta}(1, 1)$. In our example above, if we'd started out with an uninformative prior:
-<div class="codecell" markdown="1">
-<div class="input_area" markdown="1">
+
 
 ```python
 from sympy.stats import Beta, density
@@ -145,24 +118,18 @@ p1.append(p2[0])
 p1.show()
 ```
 
-</div>
-<div class="output_area" markdown="1">
-
 
 $\displaystyle \frac{p^{15} \left(1 - p\right)^{5}}{\operatorname{B}\left(16, 6\right)}$
 
 
 
-![png](/images/2022-04-26-Beta-Distribution-and-Unfair-Coins_files/output_7_1.png)
+    
+![png](/images/2022-04-26-Beta-Distribution-and-Unfair-Coins_files/2022-04-26-Beta-Distribution-and-Unfair-Coins_8_1.png)
+    
 
-
-</div>
-
-</div>
 
 We can also do the update "manually" by integrating as above, and we should get a similar graph:
-<div class="codecell" markdown="1">
-<div class="input_area" markdown="1">
+
 
 ```python
 p, N = symbols("p N")
@@ -175,13 +142,8 @@ p1.append(p2[0])
 p1.show()
 ```
 
-</div>
-<div class="output_area" markdown="1">
 
+    
+![png](/images/2022-04-26-Beta-Distribution-and-Unfair-Coins_files/2022-04-26-Beta-Distribution-and-Unfair-Coins_10_0.png)
+    
 
-![png](/images/2022-04-26-Beta-Distribution-and-Unfair-Coins_files/output_9_0.png)
-
-
-</div>
-
-</div>
