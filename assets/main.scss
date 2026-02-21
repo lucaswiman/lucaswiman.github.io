@@ -48,6 +48,11 @@ code, pre, .highlighter-rouge, .highlight, .codecell {
   font-family: "ComicCodeLigatures-Bold", monospace !important;
 }
 
+:not(pre) > code {
+  background-color: transparent;
+  border: none;
+}
+
 // ==========================================
 // Cobalt syntax highlighting theme
 // ==========================================
