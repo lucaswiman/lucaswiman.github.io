@@ -41,12 +41,11 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 // ==========================================
-// Code: normal weight, monospace
+// Code: Comic Code Ligatures Bold
 // ==========================================
 
 code, pre, .highlighter-rouge, .highlight, .codecell {
-  font-family: monospace;
-  font-weight: 400;
+  font-family: "ComicCodeLigatures-Bold", monospace !important;
 }
 
 // ==========================================
