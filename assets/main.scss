@@ -1,142 +1,391 @@
 ---
-# Only the main Sass file needs front matter (the dashes are enough)
 ---
 
-@import "{{ site.theme }}";
+// ======================
+// Variables
+// ======================
 
-// ==========================================
-// Main font: Atkinson Hyperlegible
-// (loaded via Google Fonts in head.html)
-// ==========================================
+$bg:             #1e1e1e;
+$bg-header:      #161616;
+$text:           #e0e2ea;
+$text-muted:     #8a8d97;
+$heading:        #ffffff;
+$link:           #6eb5ff;
+$link-hover:     #ffc500;
+$border:         #333333;
 
-body, p, li, td, th, blockquote {
+$code-bg:        #002240;
+$code-text:      #e0e2ea;
+$code-output-bg: #001830;
+
+$content-width:  48rem;
+$spacing:        1.5rem;
+
+// ======================
+// Reset & Base
+// ======================
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
   font-family: 'Atkinson Hyperlegible', sans-serif;
+  font-size: 18px;
+  line-height: 1.6;
+  color: $text;
+  background: $bg;
+  -webkit-font-smoothing: antialiased;
 }
+
+// ======================
+// Typography
+// ======================
 
 h1, h2, h3, h4, h5, h6 {
+  color: $heading;
   font-family: 'Atkinson Hyperlegible', sans-serif;
+  line-height: 1.25;
+  margin-top: 2rem;
+  margin-bottom: 0.5rem;
 }
 
-.site-title, .site-nav {
-  font-family: 'Atkinson Hyperlegible', sans-serif;
+h1 { font-size: 2rem; }
+h2 { font-size: 1.5rem; }
+h3 { font-size: 1.25rem; }
+
+a {
+  color: $link;
+  text-decoration: none;
+  &:hover { color: $link-hover; }
 }
 
-// ==========================================
-// Post images
-// ==========================================
+p { margin: 0 0 $spacing; }
 
-.post img {
-  display: block;
-  border: 1px solid #1a3a5c;
-  vertical-align: top;
-  margin-left: auto;
-  margin-right: auto;
+blockquote {
+  margin: $spacing 0;
+  padding: 0.5rem 1rem;
+  border-left: 3px solid $border;
+  color: $text-muted;
 }
 
-.post figcaption {
-  text-align: center;
-  font-size: .8rem;
-  font-style: italic;
-  color: #4a90b0;
+hr {
+  border: none;
+  border-top: 1px solid $border;
+  margin: 2rem 0;
 }
 
-// ==========================================
-// Code: Comic Code Ligatures Bold
-// ==========================================
+img { max-width: 100%; height: auto; }
 
-code, pre, .highlighter-rouge, .highlight, .codecell {
-  font-family: "ComicCodeLigatures-Bold", monospace !important;
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: $spacing 0;
+
+  th, td {
+    padding: 0.5rem;
+    border: 1px solid $border;
+    text-align: left;
+  }
+
+  th { background: darken($bg, 3%); color: $heading; }
+}
+
+ul, ol { padding-left: 1.5rem; }
+li { margin-bottom: 0.25rem; }
+
+// ======================
+// Layout
+// ======================
+
+.wrapper {
+  max-width: $content-width;
+  margin: 0 auto;
+  padding: 0 $spacing;
+}
+
+// ======================
+// Header
+// ======================
+
+.site-header {
+  background: $bg-header;
+  border-bottom: 1px solid $border;
+  padding: 1rem 0;
+
+  .wrapper {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+}
+
+.site-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: $heading;
+  &:hover { color: $link-hover; }
+}
+
+.site-nav a {
+  margin-left: 1.5rem;
+  color: $text-muted;
+  &:hover { color: $link-hover; }
+}
+
+// ======================
+// Content
+// ======================
+
+.page-content {
+  padding: 2rem 0;
+  min-height: 60vh;
+}
+
+// ======================
+// Posts
+// ======================
+
+.post-header { margin-bottom: 2rem; }
+
+.post-title {
+  font-size: 2rem;
+  margin-top: 0;
+}
+
+.post-meta {
+  color: $text-muted;
+  font-size: 0.9rem;
+}
+
+.post-content {
+  img {
+    display: block;
+    border: 1px solid $border;
+    margin: $spacing auto;
+  }
+
+  figcaption, .image-caption {
+    text-align: center;
+    font-size: 0.85rem;
+    font-style: italic;
+    color: $text-muted;
+  }
+}
+
+// ======================
+// Home / Post List
+// ======================
+
+.post-list {
+  list-style: none;
+  padding: 0;
+
+  li {
+    padding: $spacing 0;
+    border-bottom: 1px solid $border;
+  }
+
+  h3 {
+    margin: 0.25rem 0 0;
+    font-size: 1.25rem;
+  }
+}
+
+.post-list-heading {
+  border-bottom: 1px solid $border;
+  padding-bottom: 0.5rem;
+}
+
+// ======================
+// Footer
+// ======================
+
+.site-footer {
+  border-top: 1px solid $border;
+  padding: 2rem 0;
+  font-size: 0.85rem;
+  color: $text-muted;
+
+  a { color: $text-muted; &:hover { color: $link-hover; } }
+  p { margin: 1rem 0 0; }
+}
+
+.social-media-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+// ======================
+// Code & Fonts
+// ======================
+
+code, pre, .highlight, .codecell {
+  font-family: "ComicCodeLigatures-Bold", monospace;
 }
 
 :not(pre) > code {
-  background-color: transparent;
-  border: none;
+  background: lighten($bg, 8%);
+  padding: 0.15em 0.35em;
+  border-radius: 3px;
+  font-size: 0.9em;
 }
 
-// ==========================================
-// Cobalt syntax highlighting theme
-// ==========================================
+// ======================
+// Cobalt Syntax Highlighting
+//
+// Colors matched to user's vim config:
+//   yellow:     #ffc500  rgb(255, 197, 0)
+//   light grey: #e0e2ea  rgb(224, 226, 234)
+// ======================
 
 .highlight {
-  background-color: #002240;
-  color: #ffffff;
+  background: $code-bg;
   border-radius: 4px;
+  margin: $spacing 0;
 
-  pre.highlight { background-color: #002240; color: #ffffff; }
-  code          { background-color: transparent; color: #ffffff; }
+  // Horizontal scroll lives on the outer .highlight div.
+  // The inner pre must NOT be a scroll container, so vertical
+  // wheel events pass straight through to the page.
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
 
-  // Keywords
-  .k, .kd, .kn, .kp, .kr, .kt, .kc { color: #ff9d00; }
+  pre {
+    margin: 0;
+    padding: 1rem;
+    background: transparent;
+    color: $code-text;
+    overflow: visible;
+    line-height: 1.45;
+  }
+
+  code {
+    background: transparent;
+    color: $code-text;
+    padding: 0;
+  }
+
+  // -- Token colors --
+
+  // Keywords / operators
+  .k, .kd, .kn, .kp, .kr, .kt, .kc,
+  .o, .ow                             { color: #ff9d00; }
+
   // Strings
-  .s, .s1, .s2, .sb, .sc, .sd, .sh, .si, .sx, .sr, .ss { color: #3ad900; }
+  .s, .s1, .s2, .sb, .sc, .sd,
+  .sh, .si, .sx, .sr, .ss, .se, .dl   { color: #3ad900; }
+
   // Numbers
-  .m, .mi, .mf, .mh, .mo, .mb, .il, .mbin { color: #ff628c; }
+  .m, .mi, .mf, .mh, .mo, .mb,
+  .il, .mbin                          { color: #ff628c; }
+
   // Comments
-  .c, .c1, .cm, .cp, .cs, .ch, .cpf { color: #0088ff; font-style: italic; }
-  // Name: class
-  .nc { color: #80ffbb; }
-  // Name: function / decorator
-  .nf, .nd { color: #fad900; }
-  // Name: builtin / self / pseudo
-  .nb, .bp { color: #80ffbb; }
-  // Name: namespace / module
-  .nn { color: #80ffbb; }
-  // Operators
-  .o, .ow { color: #ff9d00; }
+  .c, .c1, .cm, .cp, .cs, .ch, .cpf   { color: #0088ff; font-style: italic; }
+
+  // Names: class, builtin, namespace
+  .nc, .nb, .bp, .nn                   { color: #80ffbb; }
+
+  // Names: function, decorator  --  user's vim yellow
+  .nf, .nd, .ni                        { color: #ffc500; }
+
+  // Names: variable, attribute, tag, label
+  .nv, .na, .nt, .nl                   { color: #ffc500; }
+
   // Punctuation
-  .p, .pi { color: #ffffff; }
+  .p, .pi                             { color: $code-text; }
+
   // Errors
-  .err { color: #ff628c; background-color: transparent; }
+  .err                                { color: #ff628c; background: transparent; }
+
   // Generic output / prompt
-  .go { color: #cccccc; }
-  .gp { color: #0088ff; }
-  .gs { font-weight: bold; }
+  .go                                 { color: #cccccc; }
+  .gp                                 { color: #0088ff; }
+  .gs                                 { font-weight: bold; }
+  .ge                                 { font-style: italic; }
+  .gd                                 { color: #ff628c; }         // diff delete
+  .gi                                 { color: #3ad900; }         // diff insert
 }
 
-// ==========================================
-// Code block border accents (Cobalt palette)
-// ==========================================
+// ======================
+// Code block border accents
+// ======================
 
-.language-python { border-left: 3px solid #ff9d00; }
-
+.language-python           { border-left: 3px solid #ff9d00; }
 .language-python + .language-plaintext {
   border-left: 3px solid #0088ff;
-  margin-left: 1rem !important;
-}
-.language-python + .language-plaintext code { background-color: #001830 !important; color: #cccccc !important; }
-.language-python + .language-plaintext pre  { background-color: #001830 !important; color: #cccccc !important; }
+  margin-left: 1rem;
 
-// ==========================================
-// Jupyter Notebook HTML Code Cells
-// ==========================================
+  pre, code {
+    background: $code-output-bg;
+    color: #cccccc;
+  }
+}
+
+// ======================
+// Jupyter Notebook Cells
+// ======================
 
 .input_area pre, .input_area div {
-  margin-bottom: 0.1rem !important;
-  margin-top: 0.1rem !important;
-  padding-bottom: 0 !important;
-  padding-top: 0 !important;
+  margin: 0.1rem 0;
+  padding: 0;
 }
+
 .output_area pre, .output_area div {
-  margin-bottom: 0.1rem !important;
-  margin-top: 0.1rem !important;
-  padding-bottom: 0 !important;
-  padding-top: 0 !important;
-  background-color: #001830 !important;
-  color: #cccccc !important;
+  margin: 0.1rem 0;
+  padding: 0;
+  background: $code-output-bg;
+  color: #cccccc;
 }
-.input_area pre {
-  border-left: 3px solid #ff9d00;
-}
-.output_area pre {
-  border-left: 3px solid #0088ff;
-  margin-left: 1rem !important;
-}
+
+.input_area pre  { border-left: 3px solid #ff9d00; }
+.output_area pre { border-left: 3px solid #0088ff; margin-left: 1rem; }
+
 .codecell {
-  border-right: 2px solid #1a3a5c;
-  margin-bottom: 1rem !important;
-  margin-top: 1rem !important;
-  padding-bottom: 0 !important;
-  padding-top: 0 !important;
+  border-right: 2px solid $border;
+  margin: 1rem 0;
+  padding: 0;
 }
 
 .codecell table { width: auto; }
+
+// ======================
+// Toast / Alert components
+// ======================
+
+.Toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1rem;
+  margin: $spacing 0;
+  border-radius: 4px;
+  border: 1px solid $border;
+  background: lighten($bg, 5%);
+
+  &--warning {
+    border-color: #d29922;
+    .Toast-icon { color: #d29922; }
+  }
+}
+
+// ======================
+// 404
+// ======================
+
+.container {
+  text-align: center;
+  h1 { font-size: 4em; margin: 2rem 0; }
+}
+
+// ======================
+// Responsive
+// ======================
+
+@media (max-width: 600px) {
+  body { font-size: 16px; }
+  .post-title { font-size: 1.5rem; }
+  .site-header .wrapper { flex-direction: column; gap: 0.5rem; }
+  .site-nav a { margin-left: 0; margin-right: 1rem; }
+}

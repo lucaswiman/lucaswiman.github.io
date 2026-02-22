@@ -1,3 +1,7 @@
+---
+title: "Notes on Teaching Transformers Arithmetic"
+---
+
 # Notes on Teaching Transformers Arithmetic
 
 I've been wanting to learn more about LLMs and transformers, so I tried reproducing the results from [Transformers Can Do Arithmetic with the Right Embeddings](https://arxiv.org/abs/2405.17399), an interesting paper on altering LLM architecture to allow more easily learning basic arithmetic.

@@ -1,37 +1,29 @@
-# Welcome to Jekyll!
-#
-# This config file is meant for settings that affect your whole blog.
-#
-# If you need help with YAML syntax, here are some quick references for you:
-# https://learn-the-web.algonquindesign.ca/topics/markdown-yaml-cheat-sheet/#yaml
-# https://learnxinyminutes.com/docs/yaml/
-
+# Site settings
 title: Lucas Wiman
 description: blog
 github_username: lucaswiman
-
-# Email and twitter are optional:
-email:
 twitter_username: lucaswiman
 
-# Set this to true to get LaTeX math equation support
+# LaTeX math support via KaTeX
 use_math: true
 
-# Add your Google Analytics ID here if you have one and want to use it
-google_analytics:
+# Layout defaults
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: "page"
+  - scope:
+      path: ""
+      type: "posts"
+    values:
+      layout: "post"
 
-# Everything below here can be ignored, unless you want to change the theme entirely
-theme: minima
 plugins:
   - jekyll-feed
   - jekyll-gist
   - jekyll-octicons
-  - jekyll-github-metadata
-
-titles_from_headings:
-  enabled:     true
-  strip_title: true
-  collections: true
+  - jekyll-seo-tag
 
 highlighter: rouge
 markdown: kramdown
@@ -43,6 +35,15 @@ kramdown:
   syntax_highlighter: rouge
 
 mastodon:
-  instance: hachyderm.io
-  username: objectObject
-  # <a rel="me" href="https://hachyderm.io/@objectObject">Mastodon</a>
+  - instance: hachyderm.io
+    username: objectObject
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - requirements.txt
+  - requirements.in
+  - make-post.py
+  - settings.ini
+  - notebooks/
+  - README.md
