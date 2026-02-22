@@ -1,9 +1,7 @@
 *.swp
 ~*
 *~
-_site
-.sass-cache
-.jekyll-cache
-.jekyll-metadata
-vendor
+node_modules
+dist
+.astro
 _notebooks/.ipynb_checkpoints
