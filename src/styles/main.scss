@@ -221,8 +221,29 @@ li { margin-bottom: 0.25rem; }
 // Code & Fonts
 // ======================
 
+/**
+ * @license
+ * MyFonts Webfont Build ID 4736261, 2022-04-27T02:11:38-0400
+ *
+ * Webfont: ComicCodeLigatures-Bold by Tabular Type Foundry
+ * URL: https://www.myfonts.com/fonts/tabular-type-foundry/comic-code/ligatures-bold/
+ * Copyright: Copyright © 2019 by Toshi Omagari. All rights reserved.
+ *
+ * © 2022 MyFonts Inc
+ */
+@font-face {
+  font-family: "ComicCodeLigatures-Bold";
+  src: url('/fonts/comic-code/ComicCodeLigaturesBold.woff2') format('woff2'),
+       url('/fonts/comic-code/ComicCodeLigaturesBold.woff') format('woff');
+  font-display: swap;
+}
+
 code, pre, .highlight, .codecell {
   font-family: "Atkinson Hyperlegible Mono", monospace;
+}
+
+pre, .highlight, .codecell, .astro-code {
+  font-family: "ComicCodeLigatures-Bold", "Atkinson Hyperlegible Mono", monospace;
 }
 
 :not(pre) > code {
