@@ -4,18 +4,18 @@
 // Variables
 // ======================
 
-$bg:             #1e1e1e;
-$bg-header:      #161616;
-$text:           #e0e2ea;
-$text-muted:     #8a8d97;
+$bg:             #132738;
+$bg-header:      #0d1f2d;
+$text:           #e6e6dc;
+$text-muted:     #77929e;
 $heading:        #ffffff;
-$link:           #6eb5ff;
+$link:           #b7cff9;
 $link-hover:     #ffc500;
-$border:         #333333;
+$border:         #1F4662;
 
-$code-bg:        #002240;
-$code-text:      #e0e2ea;
-$code-output-bg: #001830;
+$code-bg:        #0E354B;
+$code-text:      #e6e6dc;
+$code-output-bg: #0a2a3c;
 
 $content-width:  48rem;
 $spacing:        1.5rem;
@@ -277,41 +277,44 @@ code, pre, .highlight, .codecell {
     padding: 0;
   }
 
-  // -- Token colors --
+  // -- Token colors (cobalt2) --
   .k, .kd, .kn, .kp, .kr, .kt, .kc,
-  .o, .ow                             { color: #ff9d00; }
+  .o, .ow                             { color: #ff9900; }
 
   .s, .s1, .s2, .sb, .sc, .sd,
-  .sh, .si, .sx, .sr, .ss, .se, .dl   { color: #3ad900; }
+  .sh, .si, .sx, .sr, .ss, .se, .dl   { color: #9cf087; }
 
   .m, .mi, .mf, .mh, .mo, .mb,
   .il, .mbin                          { color: #ff628c; }
 
-  .c, .c1, .cm, .cp, .cs, .ch, .cpf   { color: #0088ff; font-style: italic; }
+  .c, .c1, .cm, .cp, .cs, .ch, .cpf   { color: #77929e; font-style: italic; }
 
-  .nc, .nb, .bp, .nn                   { color: #80ffbb; }
+  .nc, .nb, .bp, .nn                   { color: #00cccc; }
 
   .nf, .nd, .ni                        { color: #ffc500; }
 
-  .nv, .na, .nt, .nl                   { color: #ffc500; }
+  .nv                                  { color: #b7cff9; }
+  .na                                  { color: #ffc500; }
+  .nt                                  { color: #7AFFFF; }
+  .nl                                  { color: #7AFFFF; }
 
   .p, .pi                             { color: $code-text; }
 
-  .err                                { color: #ff628c; background: transparent; }
+  .err                                { color: #c43060; background: transparent; }
 
-  .go                                 { color: #cccccc; }
+  .go                                 { color: #e6e6dc; }
   .gp                                 { color: #0088ff; }
   .gs                                 { font-weight: bold; }
   .ge                                 { font-style: italic; }
-  .gd                                 { color: #ff628c; }
-  .gi                                 { color: #3ad900; }
+  .gd                                 { color: #c43060; }
+  .gi                                 { color: #9cf087; }
 }
 
 // ======================
 // Code block border accents
 // ======================
 
-.language-python           { border-left: 3px solid #ff9d00; }
+.language-python           { border-left: 3px solid #ff9900; }
 .language-python + .language-plaintext {
   border-left: 3px solid #0088ff;
   margin-left: 1rem;
@@ -338,7 +341,7 @@ code, pre, .highlight, .codecell {
   color: #cccccc;
 }
 
-.input_area pre  { border-left: 3px solid #ff9d00; }
+.input_area pre  { border-left: 3px solid #ff9900; }
 .output_area pre { border-left: 3px solid #0088ff; margin-left: 1rem; }
 
 .codecell {
