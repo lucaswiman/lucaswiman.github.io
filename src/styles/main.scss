@@ -250,15 +250,12 @@ li { margin-bottom: 0.25rem; }
   font-display: swap;
 }
 
-code, pre, .highlight, .codecell {
-  font-family: "Atkinson Hyperlegible Mono", monospace;
-}
-
 pre, .highlight, .codecell, .astro-code {
   font-family: "ComicCodeLigatures-Bold", "Atkinson Hyperlegible Mono", monospace;
 }
 
 :not(pre) > code {
+  font-family: "Atkinson Hyperlegible Mono", monospace;
   background: color.adjust($bg, $lightness: 8%);
   padding: 0.15em 0.35em;
   border-radius: 3px;
