@@ -1,0 +1,390 @@
+@use 'sass:color';
+
+// ======================
+// Variables
+// ======================
+
+$bg:             #1e1e1e;
+$bg-header:      #161616;
+$text:           #e0e2ea;
+$text-muted:     #8a8d97;
+$heading:        #ffffff;
+$link:           #6eb5ff;
+$link-hover:     #ffc500;
+$border:         #333333;
+
+$code-bg:        #002240;
+$code-text:      #e0e2ea;
+$code-output-bg: #001830;
+
+$content-width:  48rem;
+$spacing:        1.5rem;
+
+// ======================
+// Reset & Base
+// ======================
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: 'Atkinson Hyperlegible', sans-serif;
+  font-size: 18px;
+  line-height: 1.6;
+  color: $text;
+  background: $bg;
+  -webkit-font-smoothing: antialiased;
+}
+
+// ======================
+// Typography
+// ======================
+
+h1, h2, h3, h4, h5, h6 {
+  color: $heading;
+  font-family: 'Atkinson Hyperlegible', sans-serif;
+  line-height: 1.25;
+  margin-top: 2rem;
+  margin-bottom: 0.5rem;
+}
+
+h1 { font-size: 2rem; }
+h2 { font-size: 1.5rem; }
+h3 { font-size: 1.25rem; }
+
+a {
+  color: $link;
+  text-decoration: none;
+  &:hover { color: $link-hover; }
+}
+
+p { margin: 0 0 $spacing; }
+
+blockquote {
+  margin: $spacing 0;
+  padding: 0.5rem 1rem;
+  border-left: 3px solid $border;
+  color: $text-muted;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid $border;
+  margin: 2rem 0;
+}
+
+img { max-width: 100%; height: auto; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: $spacing 0;
+
+  th, td {
+    padding: 0.5rem;
+    border: 1px solid $border;
+    text-align: left;
+  }
+
+  th { background: color.adjust($bg, $lightness: -3%); color: $heading; }
+}
+
+ul, ol { padding-left: 1.5rem; }
+li { margin-bottom: 0.25rem; }
+
+// ======================
+// Layout
+// ======================
+
+.wrapper {
+  max-width: $content-width;
+  margin: 0 auto;
+  padding: 0 $spacing;
+}
+
+// ======================
+// Header
+// ======================
+
+.site-header {
+  background: $bg-header;
+  border-bottom: 1px solid $border;
+  padding: 1rem 0;
+
+  .wrapper {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+}
+
+.site-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: $heading;
+  &:hover { color: $link-hover; }
+}
+
+.site-nav a {
+  margin-left: 1.5rem;
+  color: $text-muted;
+  &:hover { color: $link-hover; }
+}
+
+// ======================
+// Content
+// ======================
+
+.page-content {
+  padding: 2rem 0;
+  min-height: 60vh;
+}
+
+// ======================
+// Posts
+// ======================
+
+.post-header { margin-bottom: 2rem; }
+
+.post-title {
+  font-size: 2rem;
+  margin-top: 0;
+}
+
+.post-meta {
+  color: $text-muted;
+  font-size: 0.9rem;
+}
+
+.post-content {
+  img {
+    display: block;
+    border: 1px solid $border;
+    margin: $spacing auto;
+  }
+
+  figcaption, .image-caption {
+    text-align: center;
+    font-size: 0.85rem;
+    font-style: italic;
+    color: $text-muted;
+  }
+}
+
+// ======================
+// Home / Post List
+// ======================
+
+.post-list {
+  list-style: none;
+  padding: 0;
+
+  li {
+    padding: $spacing 0;
+    border-bottom: 1px solid $border;
+  }
+
+  h3 {
+    margin: 0.25rem 0 0;
+    font-size: 1.25rem;
+  }
+}
+
+.post-list-heading {
+  border-bottom: 1px solid $border;
+  padding-bottom: 0.5rem;
+}
+
+// ======================
+// Footer
+// ======================
+
+.site-footer {
+  border-top: 1px solid $border;
+  padding: 2rem 0;
+  font-size: 0.85rem;
+  color: $text-muted;
+
+  a { color: $text-muted; &:hover { color: $link-hover; } }
+  p { margin: 1rem 0 0; }
+}
+
+.social-media-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+// ======================
+// Code & Fonts
+// ======================
+
+code, pre, .highlight, .codecell {
+  font-family: "Atkinson Hyperlegible Mono", monospace;
+}
+
+:not(pre) > code {
+  background: color.adjust($bg, $lightness: 8%);
+  padding: 0.15em 0.35em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+// ======================
+// Astro Shiki code blocks
+// ======================
+
+.astro-code {
+  background: $code-bg !important;
+  border-radius: 4px;
+  margin: $spacing 0;
+  padding: 1rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  line-height: 1.45;
+
+  code {
+    background: transparent;
+    padding: 0;
+  }
+}
+
+// ======================
+// Rouge syntax highlighting (for notebook HTML)
+// ======================
+
+.highlight {
+  background: $code-bg;
+  border-radius: 4px;
+  margin: $spacing 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+
+  pre {
+    margin: 0;
+    padding: 1rem;
+    background: transparent;
+    color: $code-text;
+    overflow: visible;
+    line-height: 1.45;
+  }
+
+  code {
+    background: transparent;
+    color: $code-text;
+    padding: 0;
+  }
+
+  // -- Token colors --
+  .k, .kd, .kn, .kp, .kr, .kt, .kc,
+  .o, .ow                             { color: #ff9d00; }
+
+  .s, .s1, .s2, .sb, .sc, .sd,
+  .sh, .si, .sx, .sr, .ss, .se, .dl   { color: #3ad900; }
+
+  .m, .mi, .mf, .mh, .mo, .mb,
+  .il, .mbin                          { color: #ff628c; }
+
+  .c, .c1, .cm, .cp, .cs, .ch, .cpf   { color: #0088ff; font-style: italic; }
+
+  .nc, .nb, .bp, .nn                   { color: #80ffbb; }
+
+  .nf, .nd, .ni                        { color: #ffc500; }
+
+  .nv, .na, .nt, .nl                   { color: #ffc500; }
+
+  .p, .pi                             { color: $code-text; }
+
+  .err                                { color: #ff628c; background: transparent; }
+
+  .go                                 { color: #cccccc; }
+  .gp                                 { color: #0088ff; }
+  .gs                                 { font-weight: bold; }
+  .ge                                 { font-style: italic; }
+  .gd                                 { color: #ff628c; }
+  .gi                                 { color: #3ad900; }
+}
+
+// ======================
+// Code block border accents
+// ======================
+
+.language-python           { border-left: 3px solid #ff9d00; }
+.language-python + .language-plaintext {
+  border-left: 3px solid #0088ff;
+  margin-left: 1rem;
+
+  pre, code {
+    background: $code-output-bg;
+    color: #cccccc;
+  }
+}
+
+// ======================
+// Jupyter Notebook Cells
+// ======================
+
+.input_area pre, .input_area div {
+  margin: 0.1rem 0;
+  padding: 0;
+}
+
+.output_area pre, .output_area div {
+  margin: 0.1rem 0;
+  padding: 0;
+  background: $code-output-bg;
+  color: #cccccc;
+}
+
+.input_area pre  { border-left: 3px solid #ff9d00; }
+.output_area pre { border-left: 3px solid #0088ff; margin-left: 1rem; }
+
+.codecell {
+  border-right: 2px solid $border;
+  margin: 1rem 0;
+  padding: 0;
+}
+
+.codecell table { width: auto; }
+
+// ======================
+// Toast / Alert components
+// ======================
+
+.Toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1rem;
+  margin: $spacing 0;
+  border-radius: 4px;
+  border: 1px solid $border;
+  background: color.adjust($bg, $lightness: 5%);
+
+  &--warning {
+    border-color: #d29922;
+    .Toast-icon { color: #d29922; }
+  }
+}
+
+// ======================
+// 404
+// ======================
+
+.container {
+  text-align: center;
+  h1 { font-size: 4em; margin: 2rem 0; }
+}
+
+// ======================
+// Responsive
+// ======================
+
+@media (max-width: 600px) {
+  body { font-size: 16px; }
+  .post-title { font-size: 1.5rem; }
+  .site-header .wrapper { flex-direction: column; gap: 0.5rem; }
+  .site-nav a { margin-left: 0; margin-right: 1rem; }
+}

@@ -1,0 +1,97 @@
+---
+interface Props {
+  title?: string;
+  description?: string;
+  useMath?: boolean;
+}
+
+const { title, description = 'blog', useMath = true } = Astro.props;
+const siteTitle = 'Lucas Wiman';
+const pageTitle = title ? `${title} | ${siteTitle}` : siteTitle;
+const year = new Date().getFullYear();
+
+import '../styles/main.scss';
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{pageTitle}</title>
+  <meta name="description" content={description}>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400;1,700&family=Atkinson+Hyperlegible+Mono:ital,wght@0,200..800;1,200..800&display=swap" rel="stylesheet">
+
+  <link rel="alternate" type="application/rss+xml" title={siteTitle} href="/feed.xml">
+  <link rel="me" href="https://hachyderm.io/@objectObject">
+
+  {useMath && (
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/katex.min.css" integrity="sha384-Wsr4Nh3yrvMf2KCebJchRJoVo1gTU6kcP05uRSh5NV3sj9+a8IomuJoQzf3sMq4T" crossorigin="anonymous">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/katex.min.js" integrity="sha384-+W9OcrYK2/bD7BmUAk+xeFAyKp0QjyRQUCxeU31dfyTt/FrPsUgaBTLLkVf33qWt" crossorigin="anonymous"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/contrib/auto-render.min.js" integrity="sha384-hCXGrW6PitJEwbkoStFjeJxv+fSOOQKOPbJxSfM6G5sWZjAyWhXiTIIAmQqnlLlh" crossorigin="anonymous"></script>
+    <script>
+      document.addEventListener("DOMContentLoaded", function() {
+        renderMathInElement(document.body, {
+          delimiters: [
+            {left: "$$", right: "$$", display: true},
+            {left: "\\[", right: "\\]", display: true},
+            {left: "[%", right: "%]", display: true},
+            {left: "$", right: "$", display: false},
+            {left: "\\(", right: "\\)", display: false}
+          ]
+        });
+      });
+    </script>
+  )}
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrapper">
+      <a class="site-title" href="/">{siteTitle}</a>
+      <nav class="site-nav">
+        <a href="/about">About</a>
+        <a href="/feed.xml">RSS</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page-content">
+    <div class="wrapper">
+      <slot />
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrapper">
+      <ul class="social-media-list">
+        <li><a href="https://github.com/lucaswiman">GitHub</a></li>
+        <li><a href="https://hachyderm.io/@objectObject" rel="me">Mastodon</a></li>
+        <li><a href="https://www.twitter.com/lucaswiman">Twitter</a></li>
+      </ul>
+      <p>&copy; {year} {siteTitle}</p>
+    </div>
+  </footer>
+
+  <script>
+    function wrap_img() {
+      var elements = document.querySelectorAll(".post-content img");
+      Array.prototype.forEach.call(elements, function(el) {
+        if (el.getAttribute("title")) {
+          const caption = document.createElement('figcaption');
+          var node = document.createTextNode(el.getAttribute("title"));
+          caption.appendChild(node);
+          const wrapper = document.createElement('figure');
+          wrapper.className = 'image';
+          el.parentNode.insertBefore(wrapper, el);
+          el.parentNode.removeChild(el);
+          wrapper.appendChild(el);
+          wrapper.appendChild(caption);
+        }
+      });
+    }
+    window.onload = wrap_img;
+  </script>
+</body>
+</html>
