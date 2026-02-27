@@ -25,52 +25,178 @@ The `deposit` method has a classic time-of-check-to-time-of-use (TOCTOU) bug: it
 
 ```python
 from threading import Thread
+from collections import Counter
 
 def test_deposit_not_threadsafe():
     """This test SHOULD fail, but almost never does."""
     account = AccountBalance(balance=0)
-    t1 = Thread(target=account.deposit, args=(100,))
-    t2 = Thread(target=account.deposit, args=(100,))
-    t1.start(); t2.start()
-    t1.join(); t2.join()
-    assert account._balance == 200  # Almost always passes!
+
+    balances = Counter()
+
+    for _ in range(10_000):
+        account = AccountBalance(balance=0)
+        t1 = Thread(target=account.deposit, args=(100,))
+        t2 = Thread(target=account.deposit, args=(100,))
+        t1.start(); t2.start()
+        t1.join(); t2.join()
+        balances[account._balance] += 1
+
+    # Both threads read balance=0, then both write 0+100=100.
+    # The second deposit is lost!
+    assert balances == {200: 10_000}
 ```
 
 ```output
-/Users/lucaswiman/.local/share/uv/python/cpython-3.12.12-macos-aarch64-none/bin/python: No module named pytest
+.                                                                        [100%]
+1 passed in 1.72s
 ```
 
 And some changes may reduce the likelihood of races without actually eliminating them, so how can you be _sure_ you eliminated the race condition you found?
-The key idea is to use `threading.Event` or `threading.Barrier` objects to force a certain order of execution:
+The key idea is to use `threading.Event` or `threading.Barrier` objects to _force_ a certain order of execution:
 
 ```python
 from threading import Barrier, Thread
 from unittest.mock import patch
+from collections import Counter
 
-def test_deposit_race():
-    account = AccountBalance(balance=0)
-    barrier = Barrier(2)
-
+def test_deposit_race_barrier():
     original_get = AccountBalance.get_balance
 
     def synced_get(self):
         result = original_get(self)
         barrier.wait()  # Both threads must read before either proceeds to write
         return result
+    balances = Counter()
 
-    with patch.object(AccountBalance, 'get_balance', synced_get):
-        t1 = Thread(target=account.deposit, args=(100,))
-        t2 = Thread(target=account.deposit, args=(100,))
-        t1.start(); t2.start()
-        t1.join(); t2.join()
+    for _ in range(10_000):
+        account = AccountBalance(balance=0)
+        barrier = Barrier(2)
+
+        with patch.object(AccountBalance, 'get_balance', synced_get):
+            t1 = Thread(target=account.deposit, args=(100,))
+            t2 = Thread(target=account.deposit, args=(100,))
+            t1.start(); t2.start()
+            t1.join(); t2.join()
+        balances[account._balance] += 1
 
     # Both threads read balance=0, then both write 0+100=100.
     # The second deposit is lost!
-    assert account._balance == 100  # 200 expected, but only 100!
+    assert balances == {200: 10_000}
 ```
 
 ```output
-/Users/lucaswiman/.local/share/uv/python/cpython-3.12.12-macos-aarch64-none/bin/python: No module named pytest
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________________________ test_deposit_race_barrier ___________________________
+<block>:41: in test_deposit_race_barrier
+    assert balances == {200: 10_000}
+E   assert Counter({100: 10000}) == {200: 10000}
+E     
+E     Left contains 1 more item:
+E     {100: 10000}
+E     Right contains 1 more item:
+E     {200: 10000}
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED ../../../..<block>::test_deposit_race_barrier
+1 failed in 1.29s
 ```
 
-By placing a `Barrier(2)` after the read, we guarantee that both threads have read the stale value before either proceeds to write. This makes the race condition happen 100% of the time instead of once in a million runs.
+By placing a `Barrier(2)` after the read, we guarantee that both threads have read the stale value before either proceeds to write.
+This makes the race condition happen 100% of the time instead of ~never.
+But setting it up often required intricate mocking or adding test-only hooks, so I wanted a very lightweight way of specifying code markers.
+
+Modern coding agents behave a bit like a coding genie, in that you can get whatever code you want, but you have to be careful how you ask for it.
+As I started using Claude code more and more in December and January, I realized that I could just implement _all_ of my ideas I'd had for interesting projects over the year.
+So it's not just that I could implement my ideas, it's that I could make them _much_ better and _much_ more thorough.
+
+And so the initial idea was something like:
+
+```python
+class AccountBalance:
+    def __init__(self, balance=0):
+        self._balance = balance
+
+    def get_balance(self):
+        before_read()
+        return self._balance
+
+    def set_balance(self, value):
+        before_write()
+        self._balance = value
+
+    def deposit(self, amount):
+        current = self.get_balance()
+        after_read()
+        self.set_balance(current + amount)
+```
+
+Then have some syntax for defining a schedule, like:
+```python
+[(t1, "after read"), (t2, "after read")]
+```
+## Claude Workflow.
+
+I asked claude to implement basically that, and ended up with it suggesting a very heavyweight decorator-based approach that involved rewriting all your concurrent code in the new framework just to test it.
+Then I suggested using `set_trace()`, a python debugging method, and we were off to the races.
+
+The train of ideas flowed naturally after that:
+* I asked claude if there was some way to trace bytecodes, so that single line of python where races could occur could be identified and fuzzed like in [hypothesis](https://hypothesis.readthedocs.io/en/latest/).
+* Claude mentioned we could have users use different lock-primitives as with the the rust library [`loom`](https://github.com/tokio-rs/loom).
+  Loom uses a very clever technique I had heard-of-but-not-learned called dependent partial order reduction, that identifies causal relationships between different parts of the code.
+* I suggested that Claude should monkey-patch things.
+* I suggested that Claude should monkey-patch things.
+* I _told_ claude to monkey patch things.
+* No really, all the things.
+* And so on.
+
+After a while, we settled into a rhythm:
+* I would suggest new ways Claude could write tests to break the code (i.e. not find race conditions).
+* Claude would write tests that broke.
+* I would have claude fix the tests.
+
+It was a bit of an odd experience, where many of the conceptual breakthroughs weren't so much in actually figuring out how to do something, but figuring out the right way to ask Claude to do something I knew _must_ be possible to do.
+The key breakthrough was when we had an exchange that went something like this:
+
+> Me: What are some absolutely terrible ideas for how we can intercept io attribute acces and other concurrency-relevant ideas. Vile perversions of the intention of how computers should work. Write them up in BAD_IDEAS.md.
+>
+> [...]
+>
+> Me: OK, which of those are actually good ideas?
+>
+> [...]
+>
+> Me: Cool. Now implement those.
+
+Claude Opus is like a savant boyscout who is infinitely well-read/knowledgeable, but weirdly very uncreative.
+It was hard to convince Claude to monkey-patch python threading internals, which is admittedly a very bad idea under _most_ circumstances.
+It was even harder to convince Claude that intercepting libc io method calls was a good idea, even though Claude came up with the idea and put it in `BAD_IDEAS.md`.
+
+## The End Result
+
+I know this will probably come off as cocky or arrogant, but the end result is somewhere between _brilliant_ and just _unbelievably cool_.
+
+I can point it at buggy code with something much like an ordinary unit test assertion, ending up with:
+```python
+from frontrun.dpor import explore_interleavings
+
+def test_test_balance():
+    result = explore_interleavings(
+        setup=lambda: AccountBalance(),
+        threads=[
+            lambda bal: bal.deposit(100),
+            lambda bal: bal.deposit(100),
+        ],
+        invariant=lambda bal: bal.get_balance() == 200,
+        seed=42,
+    )
+    assert not result.property_holds, result.explanation
+```
+
+It can do this with database connections, files.
+With setting python variables.
+You can write test cases to either reproduce these race conditions or find them.
+And then Claude is also 
+
+Like this could've easily been a paper or a pycon talk 3 years ago.
+It would've easily taken me _years_ to implement this thing I built in two weeks on my phone. 
