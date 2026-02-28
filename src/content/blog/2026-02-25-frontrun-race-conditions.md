@@ -33,7 +33,7 @@ def test_deposit_not_threadsafe():
 
     balances = Counter()
 
-    for _ in range(10_000):
+    for _ in range(100):
         account = AccountBalance(balance=0)
         t1 = Thread(target=account.deposit, args=(100,))
         t2 = Thread(target=account.deposit, args=(100,))
@@ -43,12 +43,12 @@ def test_deposit_not_threadsafe():
 
     # Both threads read balance=0, then both write 0+100=100.
     # The second deposit is lost!
-    assert balances == {200: 10_000}
+    assert balances == {200: 100}
 ```
 
 ```output
 .                                                                        [100%]
-1 passed in 1.72s
+1 passed in 0.03s
 ```
 
 And some changes may reduce the likelihood of races without actually eliminating them, so how can you be _sure_ you eliminated the race condition you found?
@@ -68,7 +68,7 @@ def test_deposit_race_barrier():
         return result
     balances = Counter()
 
-    for _ in range(10_000):
+    for _ in range(100):
         account = AccountBalance(balance=0)
         barrier = Barrier(2)
 
@@ -81,7 +81,7 @@ def test_deposit_race_barrier():
 
     # Both threads read balance=0, then both write 0+100=100.
     # The second deposit is lost!
-    assert balances == {200: 10_000}
+    assert balances == {200: 100}
 ```
 
 ```output
@@ -89,17 +89,17 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 __________________________ test_deposit_race_barrier ___________________________
 <block>:41: in test_deposit_race_barrier
-    assert balances == {200: 10_000}
-E   assert Counter({100: 10000}) == {200: 10000}
+    assert balances == {200: 100}
+E   assert Counter({100: 100}) == {200: 100}
 E     
 E     Left contains 1 more item:
-E     {100: 10000}
+E     {100: 100}
 E     Right contains 1 more item:
-E     {200: 10000}
+E     {200: 100}
 E     Use -v to get more diff
 =========================== short test summary info ============================
 FAILED ../../../..<block>::test_deposit_race_barrier
-1 failed in 1.29s
+1 failed in 0.04s
 ```
 
 By placing a `Barrier(2)` after the read, we guarantee that both threads have read the stale value before either proceeds to write.
@@ -112,6 +112,8 @@ So it's not just that I could implement my ideas, it's that I could make them _m
 
 And so the initial idea was something like:
 
+
+<!-- noexec -->
 ```python
 class AccountBalance:
     def __init__(self, balance=0):
@@ -132,6 +134,7 @@ class AccountBalance:
 ```
 
 Then have some syntax for defining a schedule, like:
+<!-- noexec -->
 ```python
 [(t1, "after read"), (t2, "after read")]
 ```
@@ -177,26 +180,72 @@ It was even harder to convince Claude that intercepting libc io method calls was
 I know this will probably come off as cocky or arrogant, but the end result is somewhere between _brilliant_ and just _unbelievably cool_.
 
 I can point it at buggy code with something much like an ordinary unit test assertion, ending up with:
+
 ```python
-from frontrun.dpor import explore_interleavings
+from frontrun.dpor import explore_dpor
 
 def test_test_balance():
-    result = explore_interleavings(
+    result = explore_dpor(
         setup=lambda: AccountBalance(),
         threads=[
             lambda bal: bal.deposit(100),
             lambda bal: bal.deposit(100),
         ],
         invariant=lambda bal: bal.get_balance() == 200,
-        seed=42,
     )
-    assert not result.property_holds, result.explanation
+    assert result.property_holds, result.explanation
 ```
 
+```output
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________________________ test_test_balance _______________________________
+<block>:26: in test_test_balance
+    assert result.property_holds, result.explanation
+E   AssertionError: Race condition found after 2 interleavings.
+E     
+E       Lost update: threads 0 and 1 both read _balance before either wrote it back.
+E     
+E     
+E       Thread 0 | py:6     return self._balance
+E                | [read AccountBalance._balance]
+E       Thread 1 | py:6     return self._balance
+E                | [read AccountBalance._balance]
+E       Thread 1 | py:9     self._balance = value
+E                | [write AccountBalance._balance]
+E       Thread 0 | py:9     self._balance = value
+E                | [write AccountBalance._balance]
+E     
+E       Reproduced 10/10 times (100%)
+E     
+E   assert False
+E    +  where False = InterleavingResult(property_holds=False, counterexample=[0, 0, 0, 0, 0, ...(50 steps)], num_explored=2).property_holds
+=========================== short test summary info ============================
+FAILED ../../../..<block>::test_test_balance
+1 failed in 0.05s
+```
+
+
 It can do this with database connections, files.
-With setting python variables.
+Setting python variables.
 You can write test cases to either reproduce these race conditions or find them.
 And then Claude is also 
 
 Like this could've easily been a paper or a pycon talk 3 years ago.
-It would've easily taken me _years_ to implement this thing I built in two weeks on my phone. 
+It would've easily taken me _years_ to implement this thing I built in two weeks.
+This thing I where I did a substantial amount of development _on my phone_.
+
+!["You made this" / "I made this?" meme with Claude Code](/images/2026-02-25-frontrun-race-conditions_files/claude-code-meme.png)
+
+And of course, I had Claude move the meme to the right directory so it would render on the site, which prompted this beautiful exchange:
+```
+⏺ Now let me view the image to write a reasonable alt text, and add it to the end of the
+  post.
+
+⏺ Read(public/images/2026-02-25-frontrun-race-conditions_files/claude-code-meme.png)
+  ⎿  Read image (215.8KB)
+
+⏺ Great meme. Now let me add it to the end of the post.
+```
+
+
