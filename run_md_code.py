@@ -54,18 +54,22 @@ def execute_block(code, namespace):
         return output, False
 
 
-def run_pytest(code):
+def run_pytest(code, block_label=""):
     """Write code to a temp file and run pytest on it. Return output string."""
     fd, path = tempfile.mkstemp(suffix=".py", prefix="md_test_")
     try:
         with os.fdopen(fd, "w") as f:
             f.write(code)
-        result = subprocess.run(
-            [sys.executable, "-m", "pytest", path, "--tb=short", "-q"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pytest", path, "--tb=short", "-q"],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"TIMEOUT in {block_label}:\n{code}", file=sys.stderr)
+            return f"TIMEOUT after 300s"
         output = (result.stdout + result.stderr).strip()
         # Replace temp file paths with something readable
         basename = os.path.basename(path).replace(".py", "")
@@ -123,7 +127,14 @@ def process(filepath):
             result.append(raw)
             continue
 
-        # Python code block
+        # Python code block — skip if preceded by <!-- noexec -->
+        if result and isinstance(result[-1], str) and "<!-- noexec -->" in result[-1]:
+            result.append(raw)
+            print(f"--- block {i} (skipped) ---", file=sys.stderr)
+            print(file=sys.stderr)
+            i += 1
+            continue
+
         result.append(raw)
 
         print(f"--- block {i} ---", file=sys.stderr)
@@ -133,7 +144,7 @@ def process(filepath):
 
         if has_test:
             test_code = "\n\n".join(successful_blocks + [code])
-            output = run_pytest(test_code)
+            output = run_pytest(test_code, block_label=f"block {i}")
         else:
             output, success = execute_block(code, namespace)
             if success:
