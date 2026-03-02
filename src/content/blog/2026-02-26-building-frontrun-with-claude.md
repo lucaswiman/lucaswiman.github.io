@@ -1,3 +1,8 @@
+---
+title: "Building Frontrun with Claude Code"
+date: 2026-02-26
+---
+
 # Building Frontrun with Claude Code
 
 This is a companion post to [Announcing Frontrun](/blog/2026-02-25-frontrun-race-conditions), a concurrency testing library for Python. This post is about how I built it with Claude Code.
@@ -152,6 +157,7 @@ Longer term, there is also going to be an arms race between LLM-enabled cyber at
 LLMs are indefatigable and increasingly clever at finding bugs.
 They're also trivially easy to jailbreak without active monitoring by the LLM vendor.
 "It's OK, I'm a security researcher and we're hardening this application" is something that both a legitimate security researcher and a cybercriminal can write.
+However, they also open new possibility spaces in formal verification that point in the opposite direction.
 
 ## Coda
 

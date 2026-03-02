@@ -1,3 +1,8 @@
+---
+title: "Announcing Frontrun"
+date: 2026-02-25
+---
+
 # Announcing Frontrun
 
 ## tl;dr
@@ -205,6 +210,8 @@ In the example above, there are four events: two reads across the two threads (R
 Concurrency control primitives like locks disallow certain event orderings.
 Then the causal structure also means that some orderings are _equivalent_, so we only need to run one from each equivalence class to verify if a race condition occurs, e.g. `R1R2W1W2` is causally equivalent to `R2R1W1W2`.
 This can exponentially reduce the size of the search space and also guarantee completeness (you've explored all possible orderings of events up to causal equivalence.)
+
+For a more detailed walkthrough of the ideas used in the DPOR implementation in frontrun, see the ["DPOR: Dynamic Partial Order Reduction"](https://lucaswiman.github.io/frontrun/dpor.html#dpor-dynamic-partial-order-reduction) section in the library documentation.
 
 ### Byte Code Shuffling
 
