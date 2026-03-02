@@ -130,7 +130,7 @@ Frontrun can then often output an exact sequence of events required to trigger t
 ```python
 from frontrun.dpor import explore_dpor
 
-def test_test_balance():
+def test_balance():
     result = explore_dpor(
         setup=lambda: AccountBalance(),
         threads=[
@@ -145,8 +145,8 @@ def test_test_balance():
 ```output
 F                                                                        [100%]
 =================================== FAILURES ===================================
-______________________________ test_test_balance _______________________________
-<block>:26: in test_test_balance
+______________________________ test_balance _______________________________
+<block>:26: in test_balance
     assert result.property_holds, result.explanation
 E   AssertionError: Race condition found after 2 interleavings.
 E     
@@ -167,7 +167,7 @@ E
 E   assert False
 E    +  where False = InterleavingResult(property_holds=False, counterexample=[0, 0, 0, 0, 0, ...(50 steps)], num_explored=2).property_holds
 =========================== short test summary info ============================
-FAILED ../../../..<block>::test_test_balance
+FAILED ../../../..<block>::test_balance
 1 failed in 0.05s
 ```
 
@@ -194,7 +194,7 @@ This mode is useful for reproducing race conditions you already know are there a
 
 ### ["DPOR"](https://en.wikipedia.org/wiki/Partial_order_reduction)
 
-This is a method from linear logic where certain events (variable reads, writes, locks, etc.) are annotated and their "causal" structure is kept track of.
+This is a method from formal verification of concurrent systems (see Flanagan & Godefroid, 2005; cited in the wikipedia page) where certain events (variable reads, writes, locks, etc.) are annotated and their "causal" structure is kept track of.
 In the example above, there are four events: two reads across the two threads (R1 and R2) and two writes (W1 and W2).
 
 * One possible ordering is `R1W1R2W2`.
@@ -211,7 +211,7 @@ This can exponentially reduce the size of the search space and also guarantee co
 We use python tracing operations like `set_trace` to interleave python bytecode operations according to a randomly assigned schedule.
 Here the idea is similar to ordinary property-based testing, but the random data under test is the _order of events_ rather than the input data.
 (Though it should be possible to compose data and event ordering using `hypothesis` strategies.)
-While it sounds like this should hit some kind of exponential blowup and almost never trigger race conditions, many race conditions are _very_ easy to trigger if two events take place around the same time (e.g. starting two threads in succession a unit test).
+While it sounds like this should hit some kind of exponential blowup and almost never trigger race conditions, many race conditions are _very_ easy to trigger if two events take place around the same time (e.g. starting two threads in succession in a unit test).
 They might rarely show up in production because most events against a particular record take place at different times until a user starts rage clicking or whatever.
 
 ## Conclusion

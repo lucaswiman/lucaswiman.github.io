@@ -79,8 +79,8 @@ From the previous post, consider that this concurrency trace was generated autom
 
 <!-- noexec -->
 ```
-______________________________ test_test_balance _______________________________
-<block>:26: in test_test_balance
+______________________________ test_balance _______________________________
+<block>:26: in test_balance
     assert result.property_holds, result.explanation
 E   AssertionError: Race condition found after 2 interleavings.
 E     
@@ -102,7 +102,7 @@ E   assert False
 ```
 
 Like this could've easily been a paper or a pycon talk 3 years ago.
-As far as I can tell, DPOR has never been done in Python, and automatic detection of IO by intercepting libc calls for concurrency teting also hasn't been done in Python (or anywhere?).
+As far as I can tell, DPOR has never been done in Python, and automatic detection of IO by intercepting libc calls for concurrency testing also hasn't been done in Python (or anywhere?).
 It would've easily taken me _years_ as a part time project to implement this thing I built as a part-time side project in about two weeks.
 This thing where I did a substantial amount of development _on my phone_.
 
@@ -135,9 +135,9 @@ The last few months have made it abundantly clear that software development will
 Agents are now significantly better than humans at character-level code manipulation.
 They are also much faster than humans at writing code, and much more knowledgeable than most software developers about most areas of software development.
 
-I don't believe there's a natural stopping point to this or some unintimable human _je ne se qua_ that machines will never have.
+I don't believe there's a natural stopping point to this or some inimitable human _je ne sais quoi_ that machines will never have.
 Indeed, I expect my job as it currently exists to be almost completely automated within two years, probably sooner.
-I so no technical barriers to doing that, though I will do my best to adapt as I can.
+I see no technical barriers to doing that, though I will do my best to adapt as I can.
 And I don't think that's unique to software or even white collar work.
 
 However I think there are some significant things which are missing in the short term, and which we will need to develop on an ongoing basis.
@@ -149,7 +149,7 @@ My hope is that improved testing tools like Frontrun will allow coding agents to
 I have a number of other ideas in this vein, Frontrun was just the easiest to implement.
 
 Longer term, there is also going to be an arms race between LLM-enabled cyber attackers and defenders.
-LLMs are indefatiguable and increasingly clever at finding bugs.
+LLMs are indefatigable and increasingly clever at finding bugs.
 They're also trivially easy to jailbreak without active monitoring by the LLM vendor.
 "It's OK, I'm a security researcher and we're hardening this application" is something that both a legitimate security researcher and a cybercriminal can write.
 
