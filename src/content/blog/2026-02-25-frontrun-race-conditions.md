@@ -226,11 +226,8 @@ FAILED ../../../..<block>::test_test_balance
 ```
 
 
-It can do this with database connections, files.
-Setting python variables.
+It can do this with database connections, files, setting variables, etc.
 You can write test cases to either reproduce these race conditions or find them.
-And then Claude is also 
-
 Like this could've easily been a paper or a pycon talk 3 years ago.
 It would've easily taken me _years_ to implement this thing I built in two weeks.
 This thing I where I did a substantial amount of development _on my phone_.
@@ -248,4 +245,25 @@ And of course, I had Claude move the meme to the right directory so it would ren
 ⏺ Great meme. Now let me add it to the end of the post.
 ```
 
+So, in the interest of intellectual giving credit where it's due:
 
+Claude:
+  * Wrote ~100% of the code was written by claude.
+    I don't know rust very well at all, and I'm certainly not an expert on all the different bytecodes used in different versions of python.
+  * Came up with the idea of using DPOR and implemented the aglorithm.
+  * Came up with the approach for detecting IO in C code (using `LD_PRELOAD`), though it advised against actually doing this.
+
+I:
+  * Came up with the idea for comment-based trace markers and random bytecode shuffling.
+    This seems to be able to find race conditions almost as well as DPOR, at the cost of much less interpretable error traces.
+  * Came up with the approach of monkey patching and tracing, then kept pushing Claude to see that through to the logical conclusion.
+  * Came up with the overall API and made it significantly more ergonomic than Claude's initial attempts.
+
+Naming the library was one of the most important and difficult parts, and was definitely a team effort.
+I've had so many ideas fizzle over the years because of a kind of perfectionism where the first thing I need to do on a software project is give the repo a name, but then I search existing packages and find the good names are often taken.
+I had Claude search through pypi for dozens of names with themes around weaving, shuffling, cheating, rigging, ordering, etc., very quickly eliminating ones that were already taken.
+Eventually it was down to frontrun and a few others, when we came up with the idea of intercepting libc IO calls with `LD_PRELOAD` and frontrun fit perfectly. You now execute the test suite with:
+
+```
+frontrun pytest path/to/test_concurrency.py
+```
