@@ -14,7 +14,7 @@ Check out the [documentation](https://lucaswiman.github.io/frontrun), the [GitHu
 pip install frontrun
 ```
 
-I also wrote a [follow-up post about building frontrun with Claude Code](/blog/2026-02-26-building-frontrun-with-claude).
+I also wrote a [follow-up post about building frontrun with Claude Code](/blog/2026-03-01-building-frontrun-with-claude).
 
 ## Concurrency testing
 
