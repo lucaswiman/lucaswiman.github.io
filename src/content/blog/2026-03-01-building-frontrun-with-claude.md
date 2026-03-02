@@ -3,8 +3,6 @@ title: "Building Frontrun with Claude Code"
 date: 2026-03-01
 ---
 
-# Building Frontrun with Claude Code
-
 This is a companion post to [Announcing Frontrun](/blog/2026-03-01-frontrun-race-conditions), a concurrency testing library for Python. This post is about how I built it with Claude Code.
 
 !["You made this" / "I made this?" meme with Claude Code](/images/2026-02-25-frontrun-race-conditions_files/claude-code-meme.png)

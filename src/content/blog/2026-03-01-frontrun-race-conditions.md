@@ -3,8 +3,6 @@ title: "Announcing Frontrun"
 date: 2026-03-01
 ---
 
-# Announcing Frontrun
-
 ## tl;dr
 
 
