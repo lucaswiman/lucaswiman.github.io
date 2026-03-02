@@ -2,6 +2,8 @@
 
 This is a companion post to [Announcing Frontrun](/blog/2026-02-25-frontrun-race-conditions), a concurrency testing library for Python. This post is about how I built it with Claude Code.
 
+!["You made this" / "I made this?" meme with Claude Code](/images/2026-02-25-frontrun-race-conditions_files/claude-code-meme.png)
+
 Modern coding agents behave a bit like a coding genie, in that you can get whatever code you want, but you have to be careful how you ask for it.
 As I started using Claude code more and more in December and January, I realized that I could just implement _all_ of my ideas I'd had for interesting projects over the year.
 So it's not just that I could implement my ideas, it's that I could make them _much_ better and _much_ more thorough.
@@ -34,6 +36,7 @@ Then have some syntax for defining a schedule, like:
 ```python
 [(t1, "after read"), (t2, "after read")]
 ```
+
 ## Claude Workflow.
 
 I asked claude to implement basically that, and ended up with it suggesting a very heavyweight decorator-based approach that involved rewriting all your concurrent code in the new framework just to test it.
@@ -44,7 +47,7 @@ The train of ideas flowed naturally after that:
 * Claude mentioned we could have users use different lock-primitives as with the rust library [`loom`](https://github.com/tokio-rs/loom).
   Loom uses a very clever technique I had heard-of-but-not-learned called dependent partial order reduction, that identifies causal relationships between different parts of the code.
 * I suggested that Claude should monkey-patch things.
-* I suggested that Claude should monkey-patch things.
+* I suggested that Claude should _really consider_ monkey-patch things.
 * I _told_ claude to monkey patch things.
 * No really, all the things.
 * And so on.
@@ -55,7 +58,7 @@ After a while, we settled into a rhythm:
 * I would have claude fix the tests.
 
 It was a bit of an odd experience, where many of the conceptual breakthroughs weren't so much in actually figuring out how to do something, but figuring out the right way to ask Claude to do something I knew _must_ be possible to do.
-The key breakthrough was when we had an exchange that went something like this:
+One of the key breakthroughs was when we had an exchange that went something like this:
 
 > Me: What are some absolutely terrible ideas for how we can intercept io attribute access and other concurrency-relevant ideas. Vile perversions of the intention of how computers should work. Write them up in BAD_IDEAS.md.
 >
@@ -71,22 +74,37 @@ Claude Opus is like a savant boyscout who is infinitely well-read/knowledgeable,
 It was hard to convince Claude to monkey-patch python threading internals, which is admittedly a very bad idea under _most_ circumstances.
 It was even harder to convince Claude that intercepting libc io method calls was a good idea, even though Claude came up with the idea and put it in `BAD_IDEAS.md`.
 
+I know this may come off as cocky or arrogant, but the end result is somewhere between _brilliant_ and just _unbelievably cool_.
+From the previous post, consider that this concurrency trace was generated automatically without annotating the code in any way:
+
+<!-- noexec -->
+```
+______________________________ test_test_balance _______________________________
+<block>:26: in test_test_balance
+    assert result.property_holds, result.explanation
+E   AssertionError: Race condition found after 2 interleavings.
+E     
+E       Lost update: threads 0 and 1 both read _balance before either wrote it back.
+E     
+E     
+E       Thread 0 | py:6     return self._balance
+E                | [read AccountBalance._balance]
+E       Thread 1 | py:6     return self._balance
+E                | [read AccountBalance._balance]
+E       Thread 1 | py:9     self._balance = value
+E                | [write AccountBalance._balance]
+E       Thread 0 | py:9     self._balance = value
+E                | [write AccountBalance._balance]
+E     
+E       Reproduced 10/10 times (100%)
+E     
+E   assert False
+```
+
 Like this could've easily been a paper or a pycon talk 3 years ago.
-It would've easily taken me _years_ to implement this thing I built in two weeks.
+As far as I can tell, DPOR has never been done in Python, and automatic detection of IO by intercepting libc calls for concurrency teting also hasn't been done in Python (or anywhere?).
+It would've easily taken me _years_ as a part time project to implement this thing I built as a part-time side project in about two weeks.
 This thing where I did a substantial amount of development _on my phone_.
-
-!["You made this" / "I made this?" meme with Claude Code](/images/2026-02-25-frontrun-race-conditions_files/claude-code-meme.png)
-
-And of course, I had Claude move the meme to the right directory so it would render on the site, which prompted this beautiful exchange:
-```
-⏺ Now let me view the image to write a reasonable alt text, and add it to the end of the
-  post.
-
-⏺ Read(public/images/2026-02-25-frontrun-race-conditions_files/claude-code-meme.png)
-  ⎿  Read image (215.8KB)
-
-⏺ Great meme. Now let me add it to the end of the post.
-```
 
 So, in the interest of giving credit where it's due:
 
@@ -109,4 +127,41 @@ Eventually it was down to frontrun and a few others, when we came up with the id
 
 ```
 frontrun pytest path/to/test_concurrency.py
+```
+
+## Where does this leave us?
+
+The last few months have made it abundantly clear that software development will irrevocably change.
+Agents are now significantly better than humans at character-level code manipulation.
+They are also much faster than humans at writing code, and much more knowledgeable than most software developers about most areas of software development.
+
+I don't believe there's a natural stopping point to this or some unintimable human _je ne se qua_ that machines will never have.
+Indeed, I expect my job as it currently exists to be almost completely automated within two years, probably sooner.
+I so no technical barriers to doing that, though I will do my best to adapt as I can.
+And I don't think that's unique to software or even white collar work.
+
+However I think there are some significant things which are missing in the short term, and which we will need to develop on an ongoing basis.
+
+### Building high quality software with LLM agents
+
+LLMs become massively more powerful when given a way to check their work.
+My hope is that improved testing tools like Frontrun will allow coding agents to generate code that is provably free of entire classes of bugs.
+I have a number of other ideas in this vein, Frontrun was just the easiest to implement.
+
+Longer term, there is also going to be an arms race between LLM-enabled cyber attackers and defenders.
+LLMs are indefatiguable and increasingly clever at finding bugs.
+They're also trivially easy to jailbreak without active monitoring by the LLM vendor.
+"It's OK, I'm a security researcher and we're hardening this application" is something that both a legitimate security researcher and a cybercriminal can write.
+
+## Coda
+
+When I had Claude move the meme to the right directory so it would render on the site, which prompted this beautiful exchange:
+```
+⏺ Now let me view the image to write a reasonable alt text, and add it to the end of the
+  post.
+
+⏺ Read(public/images/2026-02-25-frontrun-race-conditions_files/claude-code-meme.png)
+  ⎿  Read image (215.8KB)
+
+⏺ Great meme. Now let me add it to the end of the post.
 ```
