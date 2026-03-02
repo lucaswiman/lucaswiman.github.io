@@ -5,15 +5,15 @@ date: 2026-03-01
 
 # Building Frontrun with Claude Code
 
-This is a companion post to [Announcing Frontrun](/blog/2026-02-25-frontrun-race-conditions), a concurrency testing library for Python. This post is about how I built it with Claude Code.
+This is a companion post to [Announcing Frontrun](/blog/2026-03-01-frontrun-race-conditions), a concurrency testing library for Python. This post is about how I built it with Claude Code.
 
 !["You made this" / "I made this?" meme with Claude Code](/images/2026-02-25-frontrun-race-conditions_files/claude-code-meme.png)
 
 Modern coding agents behave a bit like a coding genie, in that you can get whatever code you want, but you have to be careful how you ask for it.
-As I started using Claude code more and more in December and January, I realized that I could just implement _all_ of my ideas I'd had for interesting projects over the year.
-So it's not just that I could implement my ideas, it's that I could make them _much_ better and _much_ more thorough.
+As I started using Claude code more and more in December and January, I realized that I could just implement _all_ of my ideas I'd had for interesting projects over the years.
+And it's not just that I could implement my ideas, it's that I could make them _much_ better and _much_ more thorough.
 
-And so the initial idea was something like:
+The initial idea was something like:
 
 
 <!-- noexec -->
@@ -23,23 +23,23 @@ class AccountBalance:
         self._balance = balance
 
     def get_balance(self):
-        before_read()
+        mark.before_read()
         return self._balance
 
     def set_balance(self, value):
-        before_write()
+        mark.before_write()
         self._balance = value
 
     def deposit(self, amount):
         current = self.get_balance()
-        after_read()
+        mark.after_read()
         self.set_balance(current + amount)
 ```
 
 Then have some syntax for defining a schedule, like:
 <!-- noexec -->
 ```python
-[(t1, "after read"), (t2, "after read")]
+[(t1, mark.after_read), (t2, mark.after_read)]
 ```
 
 ## Claude Workflow.
@@ -48,9 +48,9 @@ I asked claude to implement basically that, and ended up with it suggesting a ve
 Then I suggested using `set_trace()`, a python debugging method, and we were off to the races.
 
 The train of ideas flowed naturally after that:
-* I asked claude if there was some way to trace bytecodes, so that single line of python where races could occur could be identified and fuzzed like in [hypothesis](https://hypothesis.readthedocs.io/en/latest/).
-* Claude mentioned we could have users use different lock-primitives as with the rust library [`loom`](https://github.com/tokio-rs/loom).
-  Loom uses a very clever technique I had heard-of-but-not-learned called dependent partial order reduction, that identifies causal relationships between different parts of the code.
+* I asked claude if there was some way to trace bytecodes, so that single line of python where races could occur could be identified and fuzzed using property-based tasing a la [hypothesis](https://hypothesis.readthedocs.io/en/latest/).
+* Claude mentioned we could have users use different lock-primitives, as with the rust library [`loom`](https://github.com/tokio-rs/loom).
+  Loom uses a very clever technique I had heard-of-but-not-learned called dynamic partial order reduction (DPOR), that identifies causal relationships between different parts of the code, and uses those relationships to exponentially reduce the search space.
 * I suggested that Claude should monkey-patch things.
 * I suggested that Claude should _really consider_ monkey-patch things.
 * I _told_ claude to monkey patch things.
@@ -79,8 +79,7 @@ Claude Opus is like a savant boyscout who is infinitely well-read/knowledgeable,
 It was hard to convince Claude to monkey-patch python threading internals, which is admittedly a very bad idea under _most_ circumstances.
 It was even harder to convince Claude that intercepting libc io method calls was a good idea, even though Claude came up with the idea and put it in `BAD_IDEAS.md`.
 
-I know this may come off as cocky or arrogant, but the end result is somewhere between _brilliant_ and just _unbelievably cool_.
-From the previous post, consider that this concurrency trace was generated automatically without annotating the code in any way:
+From the previous post, consider that this concurrency trace was generated automatically without annotating the code in any way.
 
 <!-- noexec -->
 ```
@@ -106,6 +105,10 @@ E
 E   assert False
 ```
 
+
+The end result is somewhere between _brilliant_ and just _unbelievably cool_.
+I know this may come off as cocky or arrogant, but I don't mean it that way.
+My point is that you can take a "merely good" programmer like myself and use LLM agents in the right way and end up with extremely impressive results.
 Like this could've easily been a paper or a pycon talk 3 years ago.
 As far as I can tell, DPOR has never been done in Python, and automatic detection of IO by intercepting libc calls for concurrency testing also hasn't been done in Python (or anywhere?).
 It would've easily taken me _years_ as a part time project to implement this thing I built as a part-time side project in about two weeks.
@@ -113,20 +116,22 @@ This thing where I did a substantial amount of development _on my phone_.
 
 So, in the interest of giving credit where it's due:
 
-Claude:
+**Claude:**
   * Wrote ~100% of the code.
     I don't know rust very well at all, and I'm certainly not an expert on all the different bytecodes used in different versions of python.
   * Came up with the idea of using DPOR and implemented the algorithm.
   * Came up with the approach for detecting IO in C code (using `LD_PRELOAD`), though it advised against actually doing this.
 
-I:
-  * Came up with the idea for comment-based trace markers and random bytecode shuffling.
+**I:**
+  * Came up with the idea for comment-based trace markers.
+  * Came up with the idea for random bytecode shuffling.
     This seems to be able to find race conditions almost as well as DPOR, at the cost of much less interpretable error traces.
   * Came up with the approach of monkey patching and tracing, then kept pushing Claude to see that through to the logical conclusion.
   * Came up with the overall API and made it significantly more ergonomic than Claude's initial attempts.
 
 Naming the library was one of the most important and difficult parts, and was definitely a team effort.
-I've had so many ideas fizzle over the years because of a kind of perfectionism where the first thing I need to do on a software project is give the repo a name, but then I search existing packages and find the good names are often taken.
+I've had so many ideas fizzle over the years because of a kind of counterproductive-perfectionism-preventing-me-from-starting, where the first thing I need to do on a software project is give the repo a name, but then I search existing packages and find the good names are taken.
+I mean to come back to it, but never do and the idea fizzles for a really stupid reason.
 I had Claude search through pypi for dozens of names with themes around weaving, shuffling, cheating, rigging, ordering, etc., very quickly eliminating ones that were already taken.
 Eventually it was down to frontrun and a few others, when we came up with the idea of intercepting libc IO calls with `LD_PRELOAD` and frontrun fit perfectly. You now execute the test suite with:
 
@@ -136,7 +141,7 @@ frontrun pytest path/to/test_concurrency.py
 
 ## Where does this leave us?
 
-The last few months have made it abundantly clear that software development will irrevocably change.
+The last few months have made it abundantly clear that software development will irrevocably change, and that the rate of change is going to be very high.
 Agents are now significantly better than humans at character-level code manipulation.
 They are also much faster than humans at writing code, and much more knowledgeable than most software developers about most areas of software development.
 
@@ -157,11 +162,14 @@ Longer term, there is also going to be an arms race between LLM-enabled cyber at
 LLMs are indefatigable and increasingly clever at finding bugs.
 They're also trivially easy to jailbreak without active monitoring by the LLM vendor.
 "It's OK, I'm a security researcher and we're hardening this application" is something that both a legitimate security researcher and a cybercriminal can write.
+
 However, they also open new possibility spaces in formal verification that point in the opposite direction.
+There are cases of genuinely _bug-free software_ (for extremely useful, but not "complete" definitions of bug-free), like a [formally verified C compiler](https://compcert.org/).
+In addition to buggy vibe-coded apps, LLMs also open the door to that kind of software on a scale that was totally inconceivable before.
 
 ## Coda
 
-When I had Claude move the meme to the right directory so it would render on the site, which prompted this beautiful exchange:
+When I had Claude move the meme at the head of the post to the right directory so it would render on the site, which prompted this beautiful exchange:
 ```
 ⏺ Now let me view the image to write a reasonable alt text, and add it to the end of the
   post.
