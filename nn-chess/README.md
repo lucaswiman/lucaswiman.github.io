@@ -14,8 +14,14 @@ knowledge baked into the agent is:
    heuristic and serves as the terminal reward signal.
 
 Everything else — piece values, tactics, positional understanding — must
-be discovered by the neural network from self-play and games against the
-human user.
+be discovered by the neural network from **games the user plays against
+it**. The agent does **not** self-play to bootstrap; the only training
+signal available to it is the user's own games. Down the road we will
+also let the user point the agent at a known-strong opponent (e.g.
+Stockfish via a worker) and watch it learn from those games, but pure
+self-play between two copies of the agent is deliberately out of scope —
+the whole point of the project is "what happens when a small network
+learns chess from one human's games."
 
 The app lives at the route **`/nn-chess`** on this site, is built as part
 of the normal Astro / GitHub Actions pipeline, and persists trained
@@ -71,9 +77,11 @@ nn-chess/
 │   ├── mcts/           ← PUCT-style MCTS that consults the NN for
 │   │                     priors + value. Pure functions over a
 │   │                     `GameState` + `Policy` abstraction; no I/O.
-│   ├── training/       ← self-play / human-play game recorder,
-│   │                     replay buffer, training loop. Takes a
-│   │                     `Storage` port (see below).
+│   ├── training/       ← user-game recorder, replay buffer, training
+│   │                     loop. Takes a `Storage` port (see below).
+│   │                     No self-play loop — training data is the
+│   │                     user's own games (and, later, games against
+│   │                     a configured external opponent).
 │   ├── storage/        ← `Storage` interface (get/put/list/delete of
 │   │                     opaque blobs keyed by string). Adapters live
 │   │                     outside `core/`.
@@ -94,17 +102,17 @@ nn-chess/
 
 - **`core/` has no environment dependencies.** It can run in Node for
   tests, in a Web Worker for training without blocking the UI, in a
-  CLI harness for "play 10,000 games against Stockfish overnight," or
-  in a future standalone repo. The UI never imports anything outside
-  `core/`'s public API plus an adapter.
+  CLI harness, or in a future standalone repo. The UI never imports
+  anything outside `core/`'s public API plus an adapter.
 - **`Storage` is a port, not `localStorage`.** The UI picks the
   adapter; the core just sees `get`/`put`. Swapping to IndexedDB or
   adding "export weights to a file" is one new adapter, no core
   changes.
 - **The agent owns the MCTS+NN loop**, not the UI. The UI calls
   `agent.selectMove(state)` and `agent.recordGameResult(history,
-  outcome)`. This means the same agent code drives human-play,
-  self-play, and engine-vs-engine harnesses.
+  outcome)`. The same agent code drives human-play in the browser
+  and (later) play against an external opponent like Stockfish; both
+  are sources of *real* games, not self-play.
 
 ## Libraries we intend to use
 
@@ -124,26 +132,66 @@ Final choices made when implementing; this is the current shortlist.
 
 ## Reward & training (the only "heuristic")
 
-The agent's value target for a position is the eventual game outcome
-from the side-to-move's perspective:
+After a game ends, every position from that game becomes a training
+example for the NN, with the targets derived purely from the outcome:
 
-- `+1` if that side delivered checkmate,
-- `−1` if that side was checkmated,
+**Value target** for a position is the eventual game outcome from the
+side-to-move's perspective:
+
+- `+1` if the side to move went on to win the game,
+- `−1` if the side to move went on to lose the game,
 - `0` for any draw (stalemate, threefold, 50-move, insufficient
   material).
 
-That's it. No material count, no mobility, no king safety, no
-piece-square tables. MCTS gives us the policy target (visit-count
-distribution at the root). Training is standard AlphaZero-style:
-self-play games + human-play games go into a replay buffer; we
-periodically sample minibatches and do a gradient step on
-`value_loss + policy_loss` (+ small L2).
+**Policy target** for a position is the move that was actually played
+from it — *but only if the player who played it won the game*. In
+other words:
 
-Because the only signal is terminal, **early play will be terrible**
-and that is expected and load-bearing. The interesting research
-question this project exists to play with is: how quickly can it
-bootstrap from nothing, and what does its learned evaluation look
-like under interpretability tools?
+- **User wins** ⇒ the user's moves become positive examples for the
+  policy head (the NN learns "in this kind of position, play what the
+  user played"). The AI's moves from that game are not used as policy
+  targets — only the value head sees them, with target `−1`.
+- **AI wins** ⇒ the AI's moves become positive examples for the
+  policy head (standard AlphaZero-style self-improvement, except the
+  data comes from a real game against the user, not self-play). The
+  user's moves from that game are not used as policy targets.
+- **Draw** ⇒ value target is `0` for both sides' positions; we skip
+  the policy loss on draws so we're not reinforcing moves that didn't
+  decisively work.
+
+This is the *only* learning signal. The NN is doing imitation
+learning of the winner — whoever the winner happens to be — combined
+with standard value-head bootstrapping from terminal outcomes.
+
+No material count, no mobility, no king safety, no piece-square
+tables. Training is AlphaZero-shaped on the loss side —
+`value_loss + policy_loss` (+ small L2) over minibatches sampled
+from a replay buffer — but the buffer is filled **only with games
+the user (or a configured external opponent) actually played against
+the agent**. There is no self-play data-generation loop.
+
+Note one subtle departure from AlphaZero: AlphaZero's policy target
+is the MCTS visit-count distribution at the root, which is
+well-defined for the AI's moves but not for the user's. To keep the
+training pipeline uniform across both kinds of moves, **we use the
+actually-played move as a one-hot policy target** (for both AI and
+human moves), and we only apply the policy loss to positions where
+the player who moved went on to win. This makes the policy head a
+behavior-cloner of the winner.
+
+This is a hard constraint, not an oversight: AlphaZero gets away
+with a tiny terminal signal because it generates millions of
+self-play games. We don't, deliberately. The interesting research
+question this project exists to play with is: **how does an MCTS+NN
+agent that only ever sees one person's games against it actually
+play, and what does its learned evaluation look like under
+interpretability tools?** "Like AlphaZero but shittier" is the
+load-bearing frame, not a self-deprecating joke.
+
+Because the only signal is terminal and the data volume is tiny,
+**early play will be terrible** and that is expected. Resist every
+temptation to "help" by adding self-play, opening books, or a
+material-aware initialization.
 
 ## Roadmap
 
@@ -161,8 +209,10 @@ like under interpretability tools?
 5. **Agent + UI.** React board, "new game" / "resign" controls,
    move history, status. Persist weights via the `localStorage`
    adapter.
-6. **Training loop.** Replay buffer, background training in a Web
-   Worker, controls for "train N self-play games."
+6. **Training loop.** Replay buffer fed by completed user-vs-agent
+   games, background gradient steps in a Web Worker so training
+   doesn't block the UI, controls for "train for N steps on the
+   games you've already played."
 7. **Interpretability.** Weight + activation viewer; per-move
    visualization of MCTS priors and value head output.
 8. **Stockfish sparring.** Optional opponent via `stockfish.js` in
