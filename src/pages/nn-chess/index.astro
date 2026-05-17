@@ -1,14 +1,14 @@
 ---
 import BaseLayout from '../../layouts/BaseLayout.astro';
-import Board from '../../../nn-chess/ui/Board.tsx';
+import Game from '../../../nn-chess/ui/Game.tsx';
 ---
-<BaseLayout title="nn-chess" description="Browser chess that learns from self-play" useMath={false}>
+<BaseLayout title="nn-chess" description="Browser chess that learns from your games" useMath={false}>
   <h1>nn-chess</h1>
   <p>
-    This is an early prototype — you are playing <em>against yourself</em> to
-    verify the board wiring works end to end. A neural-network agent that
-    learns purely from win/loss signal (no hand-coded evaluation) will be
-    plugged in during a later iteration. See the{' '}
+    Play against a neural-network agent that learns <em>solely</em> from the
+    win/loss signal of games it plays against you — no opening books, no piece
+    tables, no hand-coded evaluation. The agent starts out terrible and
+    (hopefully) improves as it accumulates games. See the{' '}
     <a href="https://github.com/lucaswiman/lucaswiman.github.io/blob/main/nn-chess/README.md">
       nn-chess README
     </a>{' '}
@@ -16,7 +16,7 @@ import Board from '../../../nn-chess/ui/Board.tsx';
     constraints that keep the learning signal honest.
   </p>
 
-  <div style="max-width: 600px; margin: 0 auto;">
-    <Board client:only="react" />
+  <div style="max-width: 620px; margin: 0 auto;">
+    <Game client:only="react" />
   </div>
 </BaseLayout>
