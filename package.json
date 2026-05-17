@@ -22,7 +22,8 @@
     "react-dom": "^19.2.6",
     "rehype-katex": "^7.0.1",
     "remark-math": "^6.0.0",
-    "sass": "^1.97.0"
+    "sass": "^1.97.0",
+    "stockfish": "^18.0.7"
   },
   "devDependencies": {
     "@types/react": "^19.2.14",
