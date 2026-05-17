@@ -20,6 +20,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Board from './Board.js';
 import { TrainingPanel } from './TrainingPanel.js';
+import { InspectorPanel } from './InspectorPanel.js';
 import {
   initialState,
   applyMove,
@@ -36,6 +37,7 @@ import {
   type GameMoveRecord,
 } from '../core/agent/index.js';
 import { ChessNet } from '../core/nn/index.js';
+import type { SearchResult } from '../core/mcts/index.js';
 import { createReplayBuffer } from '../core/training/index.js';
 import { createLocalStorageAdapter } from '../adapters/storage-localstorage.js';
 import type { BlobStorage } from '../core/storage/index.js';
@@ -98,6 +100,10 @@ export default function Game() {
   // Track agent refresh trigger so TrainingPanel can signal "agent updated".
   const [agentVersion, setAgentVersion] = useState(0);
 
+  // Last MCTS search result — passed to InspectorPanel for the MCTS readout.
+  // Cleared on new game; set after each agent move.
+  const [lastSearch, setLastSearch] = useState<SearchResult | null>(null);
+
   // Ref to hold the latest agent so async callbacks don't close over stale values.
   const agentRef = useRef<Agent | null>(null);
   agentRef.current = agent;
@@ -149,8 +155,22 @@ export default function Game() {
 
     const capturedState = session.state;
 
-    agent.selectMove(capturedState).then(({ move }) => {
+    agent.selectMove(capturedState).then(({ move, rootValue, visitCounts }) => {
       agentMoveInFlight.current = false;
+
+      // Capture the search result for the InspectorPanel.
+      // priorPolicy is not exposed by Agent.selectMove (the Agent interface
+      // only returns move/rootValue/visitCounts). We store an empty Map for
+      // priorPolicy; the MCTS panel section will show visit counts correctly
+      // but prior% will read as 0 for all moves.
+      // TODO: extend Agent.selectMove to also return priorPolicy so the
+      // Inspector can show the full MCTS breakdown without touching core/.
+      setLastSearch({
+        bestMove: move,
+        rootValue,
+        visitCounts,
+        priorPolicy: new Map(),
+      });
 
       // Record the move in history before applying.
       const record: GameMoveRecord = {
@@ -245,6 +265,7 @@ export default function Game() {
     recordedRef.current = null;
     setAgentThinking(false);
     setSession(freshSession());
+    setLastSearch(null);
     setError(null);
   }, []);
 
@@ -256,6 +277,7 @@ export default function Game() {
     recordedRef.current = null;
     setAgentThinking(false);
     setSession(freshSession());
+    setLastSearch(null);
     setError(null);
   }, []);
 
@@ -393,6 +415,14 @@ export default function Game() {
           />
         </div>
       )}
+
+      {/* Inspector panel — interpretability viewer */}
+      <InspectorPanel
+        agent={agent}
+        state={session.state}
+        lastSearch={lastSearch}
+        agentVersion={agentVersion}
+      />
     </div>
   );
 }
