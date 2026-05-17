@@ -1,5 +1,8 @@
 # nn-chess
 
+> *Candidate tagline for the eventual blog post:* **"Like AlphaZero,
+> but shittier — because it's trained off your moves."**
+
 A browser-based chess game that learns to play **solely from the win/loss
 signal of games it plays against you**. No opening books, no piece-square
 tables, no material counting, no hand-tuned evaluation. The only chess
