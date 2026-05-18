@@ -3,9 +3,10 @@ interface Props {
   title?: string;
   description?: string;
   useMath?: boolean;
+  pwa?: 'nn-chess';
 }
 
-const { title, description = 'blog', useMath = true } = Astro.props;
+const { title, description = 'blog', useMath = true, pwa } = Astro.props;
 const siteTitle = 'Lucas Wiman';
 const pageTitle = title ? `${title} | ${siteTitle}` : siteTitle;
 const year = new Date().getFullYear();
@@ -26,6 +27,29 @@ import '../styles/main.scss';
 
   <link rel="alternate" type="application/rss+xml" title={siteTitle} href="/feed.xml">
   <link rel="me" href="https://hachyderm.io/@objectObject">
+
+  {pwa === 'nn-chess' && (
+    <>
+      <link rel="manifest" href="/nn-chess/manifest.webmanifest" />
+      <meta name="theme-color" content="#06112a" />
+      <meta name="apple-mobile-web-app-capable" content="yes" />
+      <meta name="mobile-web-app-capable" content="yes" />
+      <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+      <meta name="apple-mobile-web-app-title" content="nn-chess" />
+      <link rel="apple-touch-icon" href="/nn-chess/apple-touch-icon.png" />
+      <link rel="icon" type="image/png" sizes="32x32" href="/nn-chess/favicon-32.png" />
+      <link rel="icon" type="image/png" sizes="16x16" href="/nn-chess/favicon-16.png" />
+      <script>
+        if ('serviceWorker' in navigator) {
+          window.addEventListener('load', () => {
+            navigator.serviceWorker
+              .register('/nn-chess/sw.js', { scope: '/nn-chess/' })
+              .catch((err) => console.warn('nn-chess SW registration failed', err));
+          });
+        }
+      </script>
+    </>
+  )}
 
   {useMath && (
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/katex.min.css" integrity="sha384-Wsr4Nh3yrvMf2KCebJchRJoVo1gTU6kcP05uRSh5NV3sj9+a8IomuJoQzf3sMq4T" crossorigin="anonymous">
