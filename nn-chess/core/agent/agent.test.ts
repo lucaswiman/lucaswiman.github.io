@@ -17,6 +17,7 @@ import {
   fromFen,
   legalMoves,
   applyMove,
+  sideToMove,
 } from '../rules/index.js';
 import { encodeState } from '../encoding/index.js';
 
@@ -140,7 +141,7 @@ describe('buildTrainingExamples', () => {
       records.push({
         features: encodeState(state),
         move,
-        sideToMove: state._chess.turn(),
+        sideToMove: sideToMove(state),
       });
       state = applyMove(state, move);
     }

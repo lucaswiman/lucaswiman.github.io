@@ -385,7 +385,7 @@ export async function loadAgent(
  * Numerically-stable softmax over a Float32Array.
  * Returns a new Float32Array of the same length with values summing to 1.
  */
-function softmax(logits: Float32Array): Float32Array {
+export function softmax(logits: Float32Array): Float32Array {
   let max = -Infinity;
   for (let i = 0; i < logits.length; i++) {
     if (logits[i] > max) max = logits[i];

@@ -1,22 +1,3 @@
-/**
- * Game.tsx — top-level React component for nn-chess human-vs-agent gameplay.
- *
- * Responsibilities:
- *   - Owns one Agent instance, loaded from/saved to localStorage via the
- *     namespaced adapter (prefix 'nn-chess-v1/').
- *   - Lets the user pick which color they play (white/black).
- *   - Renders <Board /> in controlled mode, applying agent moves when it's
- *     the agent's turn.
- *   - Calls agent.recordGameResult() on game end, then agent.saveTo().
- *   - Includes <TrainingPanel /> for background training controls.
- *
- * Agent config:
- *   simulations: 64  — kept low for real-time CPU play; a move should
- *                       come back in ≲ 5 seconds on a typical laptop.
- *   cPuct:       1.5 — standard PUCT exploration constant.
- *   temperature: 0   — greedy play (argmax on visit counts) for consistency.
- */
-
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Board from './Board.js';
 import { TrainingPanel } from './TrainingPanel.js';
@@ -26,44 +7,13 @@ import {
   applyMove,
   sideToMove,
   outcome,
-  isTerminal,
 } from '../core/rules/index.js';
 import type { GameState, Move, Outcome } from '../core/rules/index.js';
 import { encodeState } from '../core/encoding/index.js';
-import {
-  loadAgent,
-  type Agent,
-  type AgentConfig,
-  type GameMoveRecord,
-} from '../core/agent/index.js';
-import { ChessNet } from '../core/nn/index.js';
+import type { Agent, GameMoveRecord } from '../core/agent/index.js';
 import type { SearchResult } from '../core/mcts/index.js';
-import { createReplayBuffer } from '../core/training/index.js';
-import { createLocalStorageAdapter } from '../adapters/storage-localstorage.js';
 import type { BlobStorage } from '../core/storage/index.js';
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const STORAGE_PREFIX = 'nn-chess-v1/';
-const REPLAY_CAPACITY = 10_000;
-
-/**
- * Default agent config. simulations=64 keeps move time ≲ 5 seconds on a
- * CPU. Raise for stronger (slower) play once baseline is working.
- */
-const AGENT_CONFIG: AgentConfig = {
-  simulations: 64,
-  cPuct: 1.5,
-  temperature: 0, // greedy argmax — deterministic, no rng needed
-};
-
-// ── Helper: build the namespaced localStorage adapter ─────────────────────────
-
-function makeStorage(): BlobStorage {
-  return createLocalStorageAdapter({ prefix: STORAGE_PREFIX });
-}
-
-// ── Types ─────────────────────────────────────────────────────────────────────
+import { createAgentStorage, loadAgentFromStorage } from './agent-config.js';
 
 type PlayerColor = 'w' | 'b';
 
@@ -78,78 +28,50 @@ function freshSession(): GameSession {
   return { state: initialState(), history: [], over: false, finalOutcome: null };
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
-
 export default function Game() {
-  // Agent — null while loading from storage.
   const [agent, setAgent] = useState<Agent | null>(null);
-  const [storage] = useState<BlobStorage>(makeStorage);
-
-  // Which color the human plays.
+  const [storage] = useState<BlobStorage>(createAgentStorage);
   const [playerColor, setPlayerColor] = useState<PlayerColor>('w');
-
-  // Current game session.
   const [session, setSession] = useState<GameSession>(freshSession);
-
-  // True while the agent is computing a move.
   const [agentThinking, setAgentThinking] = useState(false);
-
-  // Error message for any unhandled async failures.
   const [error, setError] = useState<string | null>(null);
-
-  // Track agent refresh trigger so TrainingPanel can signal "agent updated".
   const [agentVersion, setAgentVersion] = useState(0);
-
-  // Last MCTS search result — passed to InspectorPanel for the MCTS readout.
-  // Cleared on new game; set after each agent move.
   const [lastSearch, setLastSearch] = useState<SearchResult | null>(null);
 
-  // Ref to hold the latest agent so async callbacks don't close over stale values.
   const agentRef = useRef<Agent | null>(null);
   agentRef.current = agent;
 
-  // Ref to prevent double-triggering agent moves in React Strict Mode.
+  // Prevents double-fire of the agent move under React Strict Mode.
   const agentMoveInFlight = useRef(false);
+  const recordedRef = useRef<GameSession | null>(null);
 
-  // ── Load agent on mount ──────────────────────────────────────────────────────
+  const resetSession = useCallback(() => {
+    agentMoveInFlight.current = false;
+    recordedRef.current = null;
+    setAgentThinking(false);
+    setSession(freshSession());
+    setLastSearch(null);
+    setError(null);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-
-    async function load() {
-      try {
-        const freshNet = ChessNet.create({ seed: Date.now() });
-        const loaded = await loadAgent(storage, {
-          net: freshNet,
-          config: AGENT_CONFIG,
-          replayCapacity: REPLAY_CAPACITY,
-        });
-        if (!cancelled) {
-          setAgent(loaded);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(`Failed to load agent: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-    }
-
-    load();
+    loadAgentFromStorage(storage)
+      .then(loaded => { if (!cancelled) setAgent(loaded); })
+      .catch(err => {
+        if (!cancelled) setError(`Failed to load agent: ${err instanceof Error ? err.message : String(err)}`);
+      });
     return () => { cancelled = true; };
   }, [storage]);
-
-  // ── Agent move trigger ────────────────────────────────────────────────────────
 
   useEffect(() => {
     if (agent === null) return;
     if (session.over) return;
-    if (agentThinking) return;
+    if (agentMoveInFlight.current) return;
 
     const currentSide = sideToMove(session.state);
-    if (currentSide === playerColor) return; // Human's turn.
+    if (currentSide === playerColor) return;
 
-    // Agent's turn — fire off a move.
-    if (agentMoveInFlight.current) return;
     agentMoveInFlight.current = true;
     setAgentThinking(true);
 
@@ -158,21 +80,10 @@ export default function Game() {
     agent.selectMove(capturedState).then(({ move, rootValue, visitCounts }) => {
       agentMoveInFlight.current = false;
 
-      // Capture the search result for the InspectorPanel.
-      // priorPolicy is not exposed by Agent.selectMove (the Agent interface
-      // only returns move/rootValue/visitCounts). We store an empty Map for
-      // priorPolicy; the MCTS panel section will show visit counts correctly
-      // but prior% will read as 0 for all moves.
-      // TODO: extend Agent.selectMove to also return priorPolicy so the
-      // Inspector can show the full MCTS breakdown without touching core/.
-      setLastSearch({
-        bestMove: move,
-        rootValue,
-        visitCounts,
-        priorPolicy: new Map(),
-      });
+      // priorPolicy is not exposed by Agent.selectMove; leave it empty so the
+      // inspector's prior% column reads 0 until core/ is extended.
+      setLastSearch({ bestMove: move, rootValue, visitCounts, priorPolicy: new Map() });
 
-      // Record the move in history before applying.
       const record: GameMoveRecord = {
         features: encodeState(capturedState),
         move,
@@ -184,12 +95,10 @@ export default function Game() {
       const gameOver = o !== 'ongoing';
 
       setSession(prev => {
-        // Guard against stale closure — only apply if session hasn't changed.
         if (prev.state !== capturedState) return prev;
-        const newHistory = [...prev.history, record];
         return {
           state: nextState,
-          history: newHistory,
+          history: [...prev.history, record],
           over: gameOver,
           finalOutcome: gameOver ? o : null,
         };
@@ -201,12 +110,7 @@ export default function Game() {
       setAgentThinking(false);
       setError(`Agent move failed: ${err instanceof Error ? err.message : String(err)}`);
     });
-  }, [agent, session, playerColor, agentThinking]);
-
-  // ── Record completed game ─────────────────────────────────────────────────────
-
-  // Ref to avoid double-recording in Strict Mode.
-  const recordedRef = useRef<GameSession | null>(null);
+  }, [agent, session, playerColor]);
 
   useEffect(() => {
     if (!session.over) return;
@@ -215,36 +119,23 @@ export default function Game() {
     if (recordedRef.current === session) return;
 
     recordedRef.current = session;
-
     agent.recordGameResult(session.history, session.finalOutcome);
-    // Persist asynchronously — don't block UI.
     agent.saveTo(storage).catch(err => {
       setError(`Failed to save after game: ${err instanceof Error ? err.message : String(err)}`);
     });
   }, [session, agent, storage]);
 
-  // ── Human move handler ────────────────────────────────────────────────────────
-
   const handleMove = useCallback((nextState: GameState, move: Move) => {
     if (!agentRef.current) return;
-
-    // Reconstruct the state before the move from our session state.
-    // Board calls onMove with the state AFTER the move, so we need
-    // to re-derive the pre-move state. We capture session.state at the
-    // time the callback fires.
     setSession(prev => {
       if (prev.over) return prev;
-
-      // Encode the pre-move state (prev.state) for the history record.
       const record: GameMoveRecord = {
         features: encodeState(prev.state),
         move,
         sideToMove: sideToMove(prev.state),
       };
-
       const o = outcome(nextState);
       const gameOver = o !== 'ongoing';
-
       return {
         state: nextState,
         history: [...prev.history, record],
@@ -254,51 +145,20 @@ export default function Game() {
     });
   }, []);
 
-  // We don't use Board's onGameOver — we detect terminal state ourselves in
-  // handleMove / the agent move path and set session.over. This avoids a
-  // double-record if Board fires onGameOver.
-
-  // ── New game ──────────────────────────────────────────────────────────────────
-
-  const startNewGame = useCallback(() => {
-    agentMoveInFlight.current = false;
-    recordedRef.current = null;
-    setAgentThinking(false);
-    setSession(freshSession());
-    setLastSearch(null);
-    setError(null);
-  }, []);
-
-  // ── Color picker ──────────────────────────────────────────────────────────────
-
   const handleColorChange = useCallback((color: PlayerColor) => {
     setPlayerColor(color);
-    agentMoveInFlight.current = false;
-    recordedRef.current = null;
-    setAgentThinking(false);
-    setSession(freshSession());
-    setLastSearch(null);
-    setError(null);
-  }, []);
-
-  // ── Agent refresh (called by TrainingPanel after training) ────────────────────
+    resetSession();
+  }, [resetSession]);
 
   const handleAgentRefresh = useCallback(async () => {
     try {
-      const freshNet = ChessNet.create({ seed: Date.now() });
-      const reloaded = await loadAgent(storage, {
-        net: freshNet,
-        config: AGENT_CONFIG,
-        replayCapacity: REPLAY_CAPACITY,
-      });
+      const reloaded = await loadAgentFromStorage(storage);
       setAgent(reloaded);
       setAgentVersion(v => v + 1);
     } catch (err) {
       setError(`Failed to reload agent: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [storage]);
-
-  // ── Rendering ─────────────────────────────────────────────────────────────────
 
   if (agent === null && error === null) {
     return <div style={{ fontFamily: 'sans-serif', padding: '16px' }}>Loading agent…</div>;
@@ -313,7 +173,6 @@ export default function Game() {
   }
 
   const humanIsWhite = playerColor === 'w';
-  const agentColor = humanIsWhite ? 'b' : 'w';
   const currentSide = sideToMove(session.state);
   const isHumanTurn = currentSide === playerColor && !session.over;
   const interactive = isHumanTurn && !agentThinking;
@@ -326,7 +185,6 @@ export default function Game() {
 
   return (
     <div style={{ fontFamily: 'sans-serif' }}>
-      {/* Color picker */}
       <div style={{ marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center' }}>
         <strong>You play as:</strong>
         <label style={{ cursor: 'pointer' }}>
@@ -351,7 +209,6 @@ export default function Game() {
         </label>
       </div>
 
-      {/* Status bar */}
       <div style={{ marginBottom: '8px', minHeight: '24px' }}>
         {agentThinking && (
           <span style={{ color: '#666', fontStyle: 'italic' }}>AI thinking…</span>
@@ -364,7 +221,6 @@ export default function Game() {
         )}
       </div>
 
-      {/* Board */}
       <Board
         state={session.state}
         interactive={interactive}
@@ -372,7 +228,6 @@ export default function Game() {
         boardOrientation={humanIsWhite ? 'white' : 'black'}
       />
 
-      {/* Game-over banner */}
       {session.over && (
         <div
           style={{
@@ -389,7 +244,7 @@ export default function Game() {
           <strong style={{ fontSize: '1.1em' }}>{outcomeText}</strong>
           <button
             type="button"
-            onClick={startNewGame}
+            onClick={resetSession}
             style={{ padding: '6px 16px', cursor: 'pointer' }}
           >
             New game
@@ -397,14 +252,12 @@ export default function Game() {
         </div>
       )}
 
-      {/* Error display */}
       {error && (
         <div style={{ marginTop: '8px', color: '#c00', fontSize: '0.9em' }}>
           {error}
         </div>
       )}
 
-      {/* Training panel */}
       {agent && (
         <div style={{ marginTop: '24px' }}>
           <TrainingPanel
@@ -416,7 +269,6 @@ export default function Game() {
         </div>
       )}
 
-      {/* Inspector panel — interpretability viewer */}
       <InspectorPanel
         agent={agent}
         state={session.state}

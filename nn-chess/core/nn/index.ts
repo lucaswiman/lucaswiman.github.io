@@ -143,6 +143,7 @@ export interface ChessNetOptions {
 export class ChessNet {
   private readonly _model: tf.LayersModel;
   private readonly _optimizer: tf.Optimizer;
+  private readonly _activationModels = new Map<string, tf.LayersModel>();
 
   // Layer names for the activation inspector (interpretability hook).
   // These match the `name` field passed to each tf.layers.* call below.
@@ -466,21 +467,25 @@ export class ChessNet {
       const result: Record<string, Float32Array> = {};
 
       for (const name of layerNames) {
-        let layer: tf.layers.Layer | null = null;
-        try {
-          layer = this._model.getLayer(name);
-        } catch {
-          // getLayer throws (instead of returning null) for unknown names.
-          continue;
+        let subModel = this._activationModels.get(name);
+        if (!subModel) {
+          let layer: tf.layers.Layer | null = null;
+          try {
+            layer = this._model.getLayer(name);
+          } catch {
+            continue;
+          }
+          if (!layer) continue;
+          // Cached because tf.model() registers in tfjs's internal model
+          // registry; building one per call leaks. Disposing the sub-model
+          // is not safe — it shares layer instances with _model, so its
+          // dispose() would corrupt the parent.
+          subModel = tf.model({
+            inputs: this._model.inputs,
+            outputs: layer.output as tf.SymbolicTensor,
+          });
+          this._activationModels.set(name, subModel);
         }
-        if (!layer) continue;
-
-        // Build a temporary sub-model from the shared input to this layer's
-        // output and run a forward pass.
-        const subModel = tf.model({
-          inputs: this._model.inputs,
-          outputs: layer.output as tf.SymbolicTensor,
-        });
         const out = subModel.predict(input) as tf.Tensor;
         result[name] = out.dataSync().slice() as Float32Array;
       }
@@ -493,6 +498,7 @@ export class ChessNet {
 
   /** Release tfjs tensors. Call when this instance is no longer needed. */
   dispose(): void {
+    this._activationModels.clear();
     this._model.dispose();
     this._optimizer.dispose();
   }

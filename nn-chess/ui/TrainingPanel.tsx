@@ -1,23 +1,8 @@
-/**
- * TrainingPanel — controls for running background gradient steps on the
- * current replay buffer.
- *
- * Props:
- *   agent          — the live Agent instance (for buffer size readout and
- *                    weight serialization before starting training).
- *   storage        — the same BlobStorage the main Game uses, so we can
- *                    persist new weights after training completes.
- *   onAgentRefresh — callback fired after the new weights have been saved;
- *                    Game.tsx calls loadAgent() again to rebuild the agent
- *                    from storage. This round-trip is the simplest correct
- *                    implementation: it uses the same code path as startup
- *                    and avoids manually swapping internal ChessNet state.
- *                    Trade-off: it re-deserializes weights from storage
- *                    (one extra round-trip), but that is cheap compared to
- *                    the training itself.
- */
+// onAgentRefresh round-trips through storage rather than swapping ChessNet
+// state in place — same code path as startup, one extra deserialize is cheap
+// against the training cost.
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import type { Agent } from '../core/agent/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
 import { TrainingClient } from './training-client.js';
@@ -45,8 +30,14 @@ export function TrainingPanel({ agent, storage, onAgentRefresh }: TrainingPanelP
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // Stable ref to the client so we don't recreate it on every render.
   const clientRef = useRef<TrainingClient | null>(null);
+
+  useEffect(() => {
+    return () => {
+      clientRef.current?.stop();
+      clientRef.current = null;
+    };
+  }, []);
 
   const handleTrain = useCallback(async () => {
     if (training) return;

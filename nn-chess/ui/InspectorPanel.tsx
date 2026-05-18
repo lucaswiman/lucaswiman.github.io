@@ -1,70 +1,24 @@
-/**
- * InspectorPanel — interpretability viewer for the nn-chess agent.
- *
- * Shows, for the current board position:
- *   (a) Value head readout — scalar + horizontal bar
- *   (b) Top-10 legal moves by raw NN policy (softmax over logits)
- *   (c) MCTS readout from the last search (visit counts, prior probs,
- *       backed-up rootValue)
- *   (d) Activation viewer — per-layer heatmap strip + stats
- *   (e) Weight inspector — byte size + per-layer stats on demand
- *
- * Memo policy:
- *   The NN calls (predict, getActivations) are memoised on a
- *   (stateKey, agentVersion) pair so that React re-renders triggered by
- *   unrelated state (e.g. agentThinking changing) don't re-invoke the NN.
- *   `stateKey` is derived from toFen(state) since GameState is a mutable
- *   wrapper and referential equality is not reliable.
- *
- * Tensor disposal:
- *   Both `predict` and `getActivations` return plain Float32Arrays (all
- *   tensor work is wrapped in tf.tidy inside the NN module). No manual
- *   disposal is needed here.
- *
- * Weight matrix note:
- *   We deliberately do NOT render full weight matrices. The policy_head
- *   layer alone has 128 × 4096 = 524 288 weights; displaying raw
- *   matrices in the DOM would be both useless and slow.
- *   Instead we show per-layer stats (min / max / mean) computed from the
- *   serialized weight blob, which is sufficient for sanity-checking that
- *   weights are training.
- */
+// NN calls (predict, getActivations) are memoized on a (stateKey, agentVersion)
+// pair so unrelated re-renders (e.g. agentThinking toggling) don't reinvoke
+// the network. stateKey is toFen(state) because GameState wraps a mutable
+// chess.js instance.
+//
+// Per-layer weight stats are shown instead of full matrices: the policy head
+// alone has 128 × 4096 = ~524k weights, which is useless and slow to render.
 
 import { useMemo, useState, useCallback } from 'react';
-import type { Agent } from '../core/agent/index.js';
+import { softmax, type Agent } from '../core/agent/index.js';
 import type { SearchResult } from '../core/mcts/index.js';
 import type { GameState } from '../core/rules/index.js';
 import { legalMoves, sideToMove, toFen } from '../core/rules/index.js';
 import { encodeState } from '../core/encoding/index.js';
 import { policyIndexFromUci } from '../core/nn/index.js';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
 export interface InspectorPanelProps {
   agent: Agent | null;
   state: GameState;
   lastSearch: SearchResult | null;
-  /** Incremented by Game.tsx whenever the agent is reloaded after training. */
   agentVersion: number;
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Numerically-stable softmax over a Float32Array. */
-function softmax(logits: Float32Array): Float32Array {
-  let max = -Infinity;
-  for (let i = 0; i < logits.length; i++) {
-    if (logits[i] > max) max = logits[i];
-  }
-  const out = new Float32Array(logits.length);
-  let sum = 0;
-  for (let i = 0; i < logits.length; i++) {
-    const e = Math.exp(logits[i] - max);
-    out[i] = e;
-    sum += e;
-  }
-  if (sum > 0) for (let i = 0; i < out.length; i++) out[i] /= sum;
-  return out;
 }
 
 function arrayStats(arr: Float32Array): { min: number; max: number; mean: number } {
@@ -241,14 +195,10 @@ function ActivationStrip({ activations }: { activations: Float32Array }) {
   );
 }
 
-// ── Weight inspector state ────────────────────────────────────────────────────
-
 interface WeightStats {
   totalBytes: number;
   layerStats: Array<{ name: string; min: number; max: number; mean: number; count: number }>;
 }
-
-// ── Main component ────────────────────────────────────────────────────────────
 
 export function InspectorPanel({
   agent,
@@ -259,18 +209,13 @@ export function InspectorPanel({
   const [weightStats, setWeightStats] = useState<WeightStats | null>(null);
   const [loadingWeights, setLoadingWeights] = useState(false);
 
-  // Derive a stable cache key from the position FEN + agent version.
-  // We use useMemo so the string is only recomputed when state or agentVersion change.
   const stateKey = useMemo(() => {
     if (!agent) return '';
     return `${toFen(state)}@v${agentVersion}`;
   }, [agent, state, agentVersion]);
 
-  // ── Memoised NN calls ──────────────────────────────────────────────────────
-  // Both `predict` and `getActivations` are wrapped in useMemo keyed on
-  // stateKey. The NN module wraps all tensor ops in tf.tidy, so returned
-  // Float32Arrays are safe plain JS arrays — no disposal needed here.
-
+  // stateKey already encodes agent (via agentVersion) and state, so the
+  // exhaustive-deps lint is intentionally suppressed on the NN-call memos.
   const prediction = useMemo(() => {
     if (!agent) return null;
     try {
@@ -290,15 +235,12 @@ export function InspectorPanel({
     }
   }, [stateKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Derived: top-K legal policy moves ─────────────────────────────────────
-
   const topPolicyMoves = useMemo(() => {
     if (!prediction || !agent) return [];
     const legal = legalMoves(state);
     if (legal.length === 0) return [];
 
     const probs = softmax(prediction.policy);
-    // Map legal moves to their softmax probability.
     const entries = legal.map(m => ({
       move: m,
       prob: probs[policyIndexFromUci(m)] ?? 0,
@@ -306,8 +248,6 @@ export function InspectorPanel({
     entries.sort((a, b) => b.prob - a.prob);
     return entries.slice(0, 10);
   }, [stateKey, prediction]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Derived: top-K MCTS moves by visit count ──────────────────────────────
 
   const topMctsMoves = useMemo(() => {
     if (!lastSearch) return [];
@@ -323,7 +263,6 @@ export function InspectorPanel({
     return entries.slice(0, 10);
   }, [lastSearch]);
 
-  // ── Weight loading ─────────────────────────────────────────────────────────
 
   const handleLoadWeights = useCallback(async () => {
     if (!agent || loadingWeights) return;
@@ -364,12 +303,10 @@ export function InspectorPanel({
     }
   }, [agent, loadingWeights]);
 
-  // ── Render guards ──────────────────────────────────────────────────────────
 
   const side = sideToMove(state);
   const sideLabel = side === 'w' ? 'White' : 'Black';
 
-  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <details

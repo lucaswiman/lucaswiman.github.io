@@ -1,19 +1,3 @@
-/**
- * SparringGame.tsx — automated agent-vs-Stockfish sparring page.
- *
- * Plays a stream of games between the nn-chess agent and a Stockfish
- * worker. Every completed game is fed to agent.recordGameResult() so the
- * agent learns from these games — per the project invariant: Stockfish
- * games are real games, not exempt from the winner-reinforcement rule.
- *
- * Agent config mirrors Game.tsx exactly (simulations=64, cPuct=1.5,
- * temperature=0) so weights from human-vs-agent games and sparring games
- * share the same learned representation.
- *
- * The board is spectator-only (interactive=false). The user picks colors,
- * Stockfish skill/movetime, number of games, and can pause/stop at any time.
- */
-
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Board from './Board.js';
 import {
@@ -27,33 +11,11 @@ import {
 } from '../core/rules/index.js';
 import type { GameState, Move, Outcome } from '../core/rules/index.js';
 import { encodeState } from '../core/encoding/index.js';
-import {
-  loadAgent,
-  type Agent,
-  type AgentConfig,
-  type GameMoveRecord,
-} from '../core/agent/index.js';
-import { ChessNet } from '../core/nn/index.js';
-import { createReplayBuffer } from '../core/training/index.js';
-import { createLocalStorageAdapter } from '../adapters/storage-localstorage.js';
+import type { Agent, GameMoveRecord } from '../core/agent/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
 import { StockfishEngine } from './stockfish-protocol.js';
 import type { StockfishConfig } from './stockfish-protocol.js';
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-/** Same namespace as Game.tsx so weights persist between both pages. */
-const STORAGE_PREFIX = 'nn-chess-v1/';
-const REPLAY_CAPACITY = 10_000;
-
-/** Same config as Game.tsx — do not diverge. */
-const AGENT_CONFIG: AgentConfig = {
-  simulations: 64,
-  cPuct: 1.5,
-  temperature: 0,
-};
-
-// ── Types ─────────────────────────────────────────────────────────────────────
+import { createAgentStorage, loadAgentFromStorage } from './agent-config.js';
 
 type AgentColor = 'w' | 'b' | 'alternate';
 type RunState = 'idle' | 'running' | 'paused' | 'stopping';
@@ -93,7 +55,7 @@ function freshSession(agentColor: 'w' | 'b', gameIndex: number): SparringSession
   };
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 function outcomeLabel(o: Outcome | null): string {
   if (!o) return '—';
@@ -111,75 +73,41 @@ function agentResultFromOutcome(agentColor: 'w' | 'b', o: Outcome): 'win' | 'dra
   return agentColor === 'b' ? 'win' : 'loss';
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
+
 
 export default function SparringGame() {
-  // ── Storage + Agent ─────────────────────────────────────────────────────────
-
-  const [storage] = useState<BlobStorage>(() =>
-    createLocalStorageAdapter({ prefix: STORAGE_PREFIX }),
-  );
+  const [storage] = useState<BlobStorage>(createAgentStorage);
   const [agent, setAgent] = useState<Agent | null>(null);
   const agentRef = useRef<Agent | null>(null);
   agentRef.current = agent;
-
-  // ── Config controls ─────────────────────────────────────────────────────────
 
   const [agentColorChoice, setAgentColorChoice] = useState<AgentColor>('w');
   const [sfSkill, setSfSkill] = useState(5);
   const [sfMovetime, setSfMovetime] = useState(100);
   const [gamesToPlay, setGamesToPlay] = useState(10);
 
-  // ── Run state ───────────────────────────────────────────────────────────────
-
   const [runState, setRunState] = useState<RunState>('idle');
   const runStateRef = useRef<RunState>('idle');
   runStateRef.current = runState;
-
-  // ── Session state (current game) ────────────────────────────────────────────
 
   const [session, setSession] = useState<SparringSession | null>(null);
   const sessionRef = useRef<SparringSession | null>(null);
   sessionRef.current = session;
 
-  // ── Tally (resets on each Start) ────────────────────────────────────────────
-
   const [tally, setTally] = useState<Tally>({ wins: 0, draws: 0, losses: 0 });
 
-  // ── Stockfish engine ────────────────────────────────────────────────────────
-
   const sfRef = useRef<StockfishEngine | null>(null);
-
-  // ── Error ───────────────────────────────────────────────────────────────────
-
   const [error, setError] = useState<string | null>(null);
-
-  // ── Load agent on mount ──────────────────────────────────────────────────────
 
   useEffect(() => {
     let cancelled = false;
-    async function load() {
-      try {
-        const freshNet = ChessNet.create({ seed: Date.now() });
-        const loaded = await loadAgent(storage, {
-          net: freshNet,
-          config: AGENT_CONFIG,
-          replayCapacity: REPLAY_CAPACITY,
-        });
-        if (!cancelled) setAgent(loaded);
-      } catch (err) {
-        if (!cancelled) {
-          setError(
-            `Failed to load agent: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
-    }
-    load();
+    loadAgentFromStorage(storage)
+      .then(loaded => { if (!cancelled) setAgent(loaded); })
+      .catch(err => {
+        if (!cancelled) setError(`Failed to load agent: ${err instanceof Error ? err.message : String(err)}`);
+      });
     return () => { cancelled = true; };
   }, [storage]);
-
-  // ── Cleanup Stockfish on unmount ─────────────────────────────────────────────
 
   useEffect(() => {
     return () => {
@@ -188,12 +116,6 @@ export default function SparringGame() {
     };
   }, []);
 
-  // ── Game loop ────────────────────────────────────────────────────────────────
-  //
-  // The loop is a plain async function rather than a useEffect-driven state
-  // machine. It holds onto live refs for agent, runState, and session so it
-  // doesn't need to be recreated on every render. We start it from handleStart
-  // and let it run to completion (or until stop/pause is requested).
 
   const gameLoopRunning = useRef(false);
 
@@ -334,7 +256,7 @@ export default function SparringGame() {
     [storage],
   );
 
-  // ── Controls ─────────────────────────────────────────────────────────────────
+
 
   const handleStart = useCallback(() => {
     if (runState !== 'idle') return;
@@ -368,7 +290,7 @@ export default function SparringGame() {
     runStateRef.current = 'stopping';
   }, [runState]);
 
-  // ── Rendering ─────────────────────────────────────────────────────────────────
+
 
   if (!agent && !error) {
     return (
