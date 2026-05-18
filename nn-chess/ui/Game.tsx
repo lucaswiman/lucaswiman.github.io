@@ -16,6 +16,13 @@ import type { SearchResult } from '../core/mcts/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
 import { createAgentStorage, loadAgentFromStorage } from './agent-config.js';
 import { ENDGAME_PRESETS, ENDGAME_PRESETS_BY_ID } from './endgame-presets.js';
+import {
+  LICHESS_CATEGORIES,
+  LICHESS_CATEGORIES_BY_ID,
+  randomPuzzle,
+  lichessPuzzleUrl,
+} from './lichess-endgames.js';
+import type { LichessPuzzle } from './lichess-endgames.js';
 
 type PlayerColor = 'w' | 'b';
 type SetupId = 'standard' | 'custom' | string;
@@ -38,6 +45,7 @@ export default function Game() {
   const [setupId, setSetupId] = useState<SetupId>('standard');
   const [customFen, setCustomFen] = useState<string>('');
   const [customFenError, setCustomFenError] = useState<string | null>(null);
+  const [currentPuzzle, setCurrentPuzzle] = useState<LichessPuzzle | null>(null);
   const [session, setSession] = useState<GameSession>(() => sessionFromState(initialState()));
   const [agentThinking, setAgentThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,32 +59,62 @@ export default function Game() {
   const agentMoveInFlight = useRef(false);
   const recordedRef = useRef<GameSession | null>(null);
 
-  const startingStateFor = useCallback((id: SetupId, fenInput: string): GameState | null => {
-    if (id === 'standard') return initialState();
-    if (id === 'custom') {
-      const trimmed = fenInput.trim();
-      if (trimmed === '') return null;
-      try {
-        return fromFen(trimmed);
-      } catch {
-        return null;
-      }
-    }
-    const preset = ENDGAME_PRESETS_BY_ID.get(id);
-    if (!preset) return initialState();
-    return fromFen(preset.fen);
-  }, []);
-
-  const resetSession = useCallback((id: SetupId = setupId, fenInput: string = customFen) => {
-    const starting = startingStateFor(id, fenInput);
-    if (starting === null) return;
+  const applyStartingState = useCallback((state: GameState) => {
     agentMoveInFlight.current = false;
     recordedRef.current = null;
     setAgentThinking(false);
-    setSession(sessionFromState(starting));
+    setSession(sessionFromState(state));
     setLastSearch(null);
     setError(null);
-  }, [setupId, customFen, startingStateFor]);
+  }, []);
+
+  // Builds the starting state for `id` without sampling — used when the
+  // color picker changes mid-game and we want to keep the current puzzle
+  // / preset rather than picking a new one.
+  const startingStateForCurrent = useCallback((): GameState | null => {
+    if (setupId === 'standard') return initialState();
+    if (setupId === 'custom') {
+      const trimmed = customFen.trim();
+      if (trimmed === '') return null;
+      try { return fromFen(trimmed); } catch { return null; }
+    }
+    const preset = ENDGAME_PRESETS_BY_ID.get(setupId);
+    if (preset) return fromFen(preset.fen);
+    if (currentPuzzle) return fromFen(currentPuzzle.fen);
+    return initialState();
+  }, [setupId, customFen, currentPuzzle]);
+
+  const startNewGame = useCallback(() => {
+    if (setupId === 'standard') {
+      setCurrentPuzzle(null);
+      applyStartingState(initialState());
+      return;
+    }
+    if (setupId === 'custom') {
+      const trimmed = customFen.trim();
+      if (trimmed === '') return;
+      try {
+        applyStartingState(fromFen(trimmed));
+      } catch (err) {
+        setCustomFenError(`Invalid FEN: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+    const preset = ENDGAME_PRESETS_BY_ID.get(setupId);
+    if (preset) {
+      setCurrentPuzzle(null);
+      applyStartingState(fromFen(preset.fen));
+      return;
+    }
+    const cat = LICHESS_CATEGORIES_BY_ID.get(setupId);
+    if (cat) {
+      const puzzle = randomPuzzle(cat);
+      setCurrentPuzzle(puzzle);
+      const state = fromFen(puzzle.fen);
+      setPlayerColor(sideToMove(state));
+      applyStartingState(state);
+    }
+  }, [setupId, customFen, applyStartingState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -171,20 +209,38 @@ export default function Game() {
 
   const handleColorChange = useCallback((color: PlayerColor) => {
     setPlayerColor(color);
-    resetSession();
-  }, [resetSession]);
+    const starting = startingStateForCurrent();
+    if (starting) applyStartingState(starting);
+  }, [startingStateForCurrent, applyStartingState]);
 
   const handleSetupChange = useCallback((id: SetupId) => {
     setSetupId(id);
     setCustomFenError(null);
+    if (id === 'standard') {
+      setCurrentPuzzle(null);
+      applyStartingState(initialState());
+      return;
+    }
+    if (id === 'custom') {
+      setCurrentPuzzle(null);
+      return; // wait for Apply
+    }
     const preset = ENDGAME_PRESETS_BY_ID.get(id);
     if (preset) {
+      setCurrentPuzzle(null);
       setPlayerColor(preset.winningSide);
+      applyStartingState(fromFen(preset.fen));
+      return;
     }
-    if (id !== 'custom') {
-      resetSession(id, customFen);
+    const cat = LICHESS_CATEGORIES_BY_ID.get(id);
+    if (cat) {
+      const puzzle = randomPuzzle(cat);
+      setCurrentPuzzle(puzzle);
+      const state = fromFen(puzzle.fen);
+      setPlayerColor(sideToMove(state));
+      applyStartingState(state);
     }
-  }, [resetSession, customFen]);
+  }, [applyStartingState]);
 
   const handleApplyCustomFen = useCallback(() => {
     const trimmed = customFen.trim();
@@ -195,12 +251,13 @@ export default function Game() {
     try {
       const state = fromFen(trimmed);
       setCustomFenError(null);
+      setCurrentPuzzle(null);
       setPlayerColor(sideToMove(state));
-      resetSession('custom', trimmed);
+      applyStartingState(state);
     } catch (err) {
       setCustomFenError(`Invalid FEN: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [customFen, resetSession]);
+  }, [customFen, applyStartingState]);
 
   const handleAgentRefresh = useCallback(async () => {
     try {
@@ -236,6 +293,7 @@ export default function Game() {
   else if (o === 'draw') outcomeText = 'Draw!';
 
   const activePreset = ENDGAME_PRESETS_BY_ID.get(setupId);
+  const activeLichessCat = LICHESS_CATEGORIES_BY_ID.get(setupId);
 
   return (
     <div style={{ fontFamily: 'sans-serif' }}>
@@ -252,8 +310,25 @@ export default function Game() {
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}
           </optgroup>
+          {LICHESS_CATEGORIES.length > 0 && (
+            <optgroup label="Lichess endgames (random)">
+              {LICHESS_CATEGORIES.map(c => (
+                <option key={c.id} value={c.id}>{c.label}</option>
+              ))}
+            </optgroup>
+          )}
           <option value="custom">Custom FEN…</option>
         </select>
+        {(activeLichessCat || activePreset || setupId === 'standard') && (
+          <button
+            type="button"
+            onClick={startNewGame}
+            style={{ padding: '3px 10px', cursor: 'pointer' }}
+            title={activeLichessCat ? 'Pick a different random puzzle' : 'Restart this position'}
+          >
+            {activeLichessCat ? 'Next puzzle' : 'Restart'}
+          </button>
+        )}
       </div>
 
       {activePreset && (
@@ -273,6 +348,32 @@ export default function Game() {
             You're set to play{' '}
             <strong>{activePreset.winningSide === 'w' ? 'White' : 'Black'}</strong>{' '}
             (the winning side) — that side's moves teach the agent the mating pattern.
+          </div>
+        </div>
+      )}
+
+      {activeLichessCat && currentPuzzle && (
+        <div
+          style={{
+            marginBottom: '12px',
+            padding: '8px 12px',
+            background: '#fffbe6',
+            border: '1px solid #e6d97a',
+            borderRadius: '6px',
+            fontSize: '0.9em',
+            color: '#444',
+          }}
+        >
+          <div style={{ marginBottom: '4px' }}>
+            <strong>{activeLichessCat.label}</strong>{' '}
+            — puzzle{' '}
+            <a href={lichessPuzzleUrl(currentPuzzle.id)} target="_blank" rel="noopener noreferrer">
+              {currentPuzzle.id}
+            </a>{' '}
+            (rating {currentPuzzle.rating})
+          </div>
+          <div style={{ color: '#666', fontSize: '0.85em' }}>
+            Themes: {currentPuzzle.themes}. Source: Lichess puzzle database (CC0).
           </div>
         </div>
       )}
@@ -354,10 +455,10 @@ export default function Game() {
           <strong style={{ fontSize: '1.1em' }}>{outcomeText}</strong>
           <button
             type="button"
-            onClick={() => resetSession()}
+            onClick={startNewGame}
             style={{ padding: '6px 16px', cursor: 'pointer' }}
           >
-            New game
+            {activeLichessCat ? 'Next puzzle' : 'New game'}
           </button>
         </div>
       )}

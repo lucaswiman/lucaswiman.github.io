@@ -218,6 +218,18 @@ material-aware initialization.
 8. **Stockfish sparring.** Optional opponent via `stockfish.js` in
    a Worker so we can watch the agent improve against a known
    yardstick.
+9. **Endgame curriculum.** Setup picker that starts a game from a
+   curated endgame FEN — hand-written textbook mates (KQ-K, KR-K,
+   ladder, KP-K) plus a sample of the Lichess CC0 puzzle database
+   filtered by endgame themes (`mateIn1-5`, `rookEndgame`,
+   `pawnEndgame`, etc.). The Lichess sample is built offline by
+   `scripts/build-lichess-endgames.mjs` and committed as a small
+   JSON file under `nn-chess/ui/lichess-endgames.json`; the 1 GB
+   source CSV is never checked in. The goal is to give the value
+   head real ±1 outcomes within ~10 plies and put forcing mating
+   sequences into the replay buffer, instead of letting a freshly-
+   initialized net stumble around from startpos against the
+   50-move rule.
 
 ## Things we will explicitly *not* do without a discussion
 
