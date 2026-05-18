@@ -5,6 +5,7 @@ import { InspectorPanel } from './InspectorPanel.js';
 import {
   initialState,
   applyMove,
+  fromFen,
   sideToMove,
   outcome,
 } from '../core/rules/index.js';
@@ -14,8 +15,10 @@ import type { Agent, GameMoveRecord } from '../core/agent/index.js';
 import type { SearchResult } from '../core/mcts/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
 import { createAgentStorage, loadAgentFromStorage } from './agent-config.js';
+import { ENDGAME_PRESETS, ENDGAME_PRESETS_BY_ID } from './endgame-presets.js';
 
 type PlayerColor = 'w' | 'b';
+type SetupId = 'standard' | 'custom' | string;
 
 interface GameSession {
   state: GameState;
@@ -24,15 +27,18 @@ interface GameSession {
   finalOutcome: Outcome | null;
 }
 
-function freshSession(): GameSession {
-  return { state: initialState(), history: [], over: false, finalOutcome: null };
+function sessionFromState(state: GameState): GameSession {
+  return { state, history: [], over: false, finalOutcome: null };
 }
 
 export default function Game() {
   const [agent, setAgent] = useState<Agent | null>(null);
   const [storage] = useState<BlobStorage>(createAgentStorage);
   const [playerColor, setPlayerColor] = useState<PlayerColor>('w');
-  const [session, setSession] = useState<GameSession>(freshSession);
+  const [setupId, setSetupId] = useState<SetupId>('standard');
+  const [customFen, setCustomFen] = useState<string>('');
+  const [customFenError, setCustomFenError] = useState<string | null>(null);
+  const [session, setSession] = useState<GameSession>(() => sessionFromState(initialState()));
   const [agentThinking, setAgentThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agentVersion, setAgentVersion] = useState(0);
@@ -45,14 +51,32 @@ export default function Game() {
   const agentMoveInFlight = useRef(false);
   const recordedRef = useRef<GameSession | null>(null);
 
-  const resetSession = useCallback(() => {
+  const startingStateFor = useCallback((id: SetupId, fenInput: string): GameState | null => {
+    if (id === 'standard') return initialState();
+    if (id === 'custom') {
+      const trimmed = fenInput.trim();
+      if (trimmed === '') return null;
+      try {
+        return fromFen(trimmed);
+      } catch {
+        return null;
+      }
+    }
+    const preset = ENDGAME_PRESETS_BY_ID.get(id);
+    if (!preset) return initialState();
+    return fromFen(preset.fen);
+  }, []);
+
+  const resetSession = useCallback((id: SetupId = setupId, fenInput: string = customFen) => {
+    const starting = startingStateFor(id, fenInput);
+    if (starting === null) return;
     agentMoveInFlight.current = false;
     recordedRef.current = null;
     setAgentThinking(false);
-    setSession(freshSession());
+    setSession(sessionFromState(starting));
     setLastSearch(null);
     setError(null);
-  }, []);
+  }, [setupId, customFen, startingStateFor]);
 
   useEffect(() => {
     let cancelled = false;
@@ -150,6 +174,34 @@ export default function Game() {
     resetSession();
   }, [resetSession]);
 
+  const handleSetupChange = useCallback((id: SetupId) => {
+    setSetupId(id);
+    setCustomFenError(null);
+    const preset = ENDGAME_PRESETS_BY_ID.get(id);
+    if (preset) {
+      setPlayerColor(preset.winningSide);
+    }
+    if (id !== 'custom') {
+      resetSession(id, customFen);
+    }
+  }, [resetSession, customFen]);
+
+  const handleApplyCustomFen = useCallback(() => {
+    const trimmed = customFen.trim();
+    if (trimmed === '') {
+      setCustomFenError('Enter a FEN string.');
+      return;
+    }
+    try {
+      const state = fromFen(trimmed);
+      setCustomFenError(null);
+      setPlayerColor(sideToMove(state));
+      resetSession('custom', trimmed);
+    } catch (err) {
+      setCustomFenError(`Invalid FEN: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [customFen, resetSession]);
+
   const handleAgentRefresh = useCallback(async () => {
     try {
       const reloaded = await loadAgentFromStorage(storage);
@@ -183,8 +235,66 @@ export default function Game() {
   else if (o === 'black-wins') outcomeText = playerColor === 'b' ? 'You win!' : 'Agent wins!';
   else if (o === 'draw') outcomeText = 'Draw!';
 
+  const activePreset = ENDGAME_PRESETS_BY_ID.get(setupId);
+
   return (
     <div style={{ fontFamily: 'sans-serif' }}>
+      <div style={{ marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong>Setup:</strong>
+        <select
+          value={setupId}
+          onChange={e => handleSetupChange(e.target.value)}
+          style={{ padding: '3px 6px' }}
+        >
+          <option value="standard">Standard game</option>
+          <optgroup label="Endgame training">
+            {ENDGAME_PRESETS.map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </optgroup>
+          <option value="custom">Custom FEN…</option>
+        </select>
+      </div>
+
+      {activePreset && (
+        <div
+          style={{
+            marginBottom: '12px',
+            padding: '8px 12px',
+            background: '#fffbe6',
+            border: '1px solid #e6d97a',
+            borderRadius: '6px',
+            fontSize: '0.9em',
+            color: '#444',
+          }}
+        >
+          <div style={{ marginBottom: '4px' }}>{activePreset.description}</div>
+          <div style={{ color: '#666' }}>
+            You're set to play{' '}
+            <strong>{activePreset.winningSide === 'w' ? 'White' : 'Black'}</strong>{' '}
+            (the winning side) — that side's moves teach the agent the mating pattern.
+          </div>
+        </div>
+      )}
+
+      {setupId === 'custom' && (
+        <div style={{ marginBottom: '12px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            value={customFen}
+            onChange={e => setCustomFen(e.target.value)}
+            placeholder="paste a FEN…"
+            style={{ flex: '1 1 360px', padding: '4px 8px', fontFamily: 'monospace', fontSize: '0.9em' }}
+          />
+          <button type="button" onClick={handleApplyCustomFen} style={{ padding: '4px 12px', cursor: 'pointer' }}>
+            Apply
+          </button>
+          {customFenError && (
+            <span style={{ color: '#c00', fontSize: '0.85em' }}>{customFenError}</span>
+          )}
+        </div>
+      )}
+
       <div style={{ marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center' }}>
         <strong>You play as:</strong>
         <label style={{ cursor: 'pointer' }}>
@@ -244,7 +354,7 @@ export default function Game() {
           <strong style={{ fontSize: '1.1em' }}>{outcomeText}</strong>
           <button
             type="button"
-            onClick={resetSession}
+            onClick={() => resetSession()}
             style={{ padding: '6px 16px', cursor: 'pointer' }}
           >
             New game
