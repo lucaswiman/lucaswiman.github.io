@@ -249,4 +249,53 @@ describe('ReplayBuffer serialize/deserialize', () => {
       expect(exampleEqual(snap[i], orig[i])).toBe(true);
     }
   });
+
+  it('v2 format is much smaller than embedding dense policy targets', () => {
+    // Sanity check that the format change actually achieves the size
+    // reduction it was introduced for. A winning-side example used to
+    // carry POLICY_SIZE × 4 = 16384 bytes of one-hot; v2 stores 4 bytes
+    // (one Float32 holding the index). Total size for a buffer of 10
+    // winning examples should sit close to features+value bytes plus
+    // ~40 bytes for the indices, not ~160 KB.
+    const buf = createReplayBuffer(10);
+    for (let i = 0; i < 10; i++) buf.add(makeExample(i, true));
+    const bytes = buf.serialize();
+
+    const perExampleFloats = FEATURE_COUNT + 1 + 1; // features + value + index
+    const expectedFloatBytes = 10 * perExampleFloats * 4;
+    // Header is JSON so allow a generous slack on top of the float payload.
+    expect(bytes.byteLength).toBeLessThan(expectedFloatBytes + 1024);
+    // And it must be far smaller than the v1-style dense form.
+    const v1FloatBytes = 10 * (FEATURE_COUNT + 1 + POLICY_SIZE) * 4;
+    expect(bytes.byteLength).toBeLessThan(v1FloatBytes / 3);
+  });
+
+  it('reads a legacy v1 blob (dense one-hot) without losing data', () => {
+    // Hand-build a v1 blob: header has NO `version` field, and the
+    // payload embeds POLICY_SIZE floats per winning example.
+    const example = makeExample(7, true);
+    const featureLen = example.features.length;
+    const header = {
+      count: 1,
+      capacity: 4,
+      featureLen,
+      hasPolicyTarget: [true],
+    };
+    const headerBytes = new TextEncoder().encode(JSON.stringify(header));
+    const floatCount = featureLen + 1 + POLICY_SIZE;
+    const payload = new Float32Array(floatCount);
+    payload.set(example.features, 0);
+    payload[featureLen] = example.valueTarget;
+    payload.set(example.policyTarget!, featureLen + 1);
+
+    const out = new Uint8Array(4 + headerBytes.length + payload.byteLength);
+    new DataView(out.buffer).setUint32(0, headerBytes.length, true);
+    out.set(headerBytes, 4);
+    out.set(new Uint8Array(payload.buffer), 4 + headerBytes.length);
+
+    const restored = deserializeReplayBuffer(out, 4);
+    expect(restored.size()).toBe(1);
+    const snap = restored.snapshot();
+    expect(exampleEqual(snap[0], example)).toBe(true);
+  });
 });

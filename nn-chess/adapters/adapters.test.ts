@@ -4,6 +4,7 @@
 // regardless of which backend is in use.
 
 import { describe, expect, it } from 'vitest';
+import { IDBFactory } from 'fake-indexeddb';
 import type { BlobStorage } from '../core/storage/index.js';
 import {
   getJson,
@@ -12,6 +13,7 @@ import {
 } from '../core/storage/index.js';
 import { createMemoryStorage } from './storage-memory.js';
 import { createLocalStorageAdapter } from './storage-localstorage.js';
+import { createIndexedDBAdapter } from './storage-indexeddb.js';
 
 // --- Mock Storage -----------------------------------------------------------
 //
@@ -196,6 +198,13 @@ sharedSuite('memory adapter', () => createMemoryStorage());
 
 sharedSuite('localStorage adapter', () =>
   createLocalStorageAdapter({ storage: new MockStorage() }),
+);
+
+// Each IDB adapter gets a fresh `IDBFactory` so the tests are isolated
+// from each other — sharing one factory would let stores from earlier
+// tests leak into later ones (or trigger upgrade-needed contention).
+sharedSuite('indexedDB adapter', () =>
+  createIndexedDBAdapter({ factory: new IDBFactory() }),
 );
 
 sharedSuite(
