@@ -447,6 +447,7 @@ export default function Game() {
             background: '#f0f4ff',
             border: '1px solid #aac',
             borderRadius: '6px',
+            color: '#1a1a1a',
             display: 'flex',
             alignItems: 'center',
             gap: '16px',
