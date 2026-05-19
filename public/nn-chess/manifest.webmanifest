@@ -1,0 +1,17 @@
+{
+  "name": "nn-chess",
+  "short_name": "nn-chess",
+  "description": "Browser chess that learns from your games.",
+  "id": "/nn-chess/",
+  "start_url": "/nn-chess/",
+  "scope": "/nn-chess/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#06112a",
+  "theme_color": "#06112a",
+  "icons": [
+    { "src": "/nn-chess/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/nn-chess/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/nn-chess/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

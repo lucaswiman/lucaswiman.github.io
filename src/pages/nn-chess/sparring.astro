@@ -1,0 +1,21 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import SparringGame from '../../../nn-chess/ui/SparringGame.tsx';
+---
+<BaseLayout title="nn-chess — Stockfish sparring" description="Watch the nn-chess agent spar against Stockfish" useMath={false} pwa="nn-chess">
+  <h1>nn-chess — Stockfish sparring</h1>
+  <p>
+    <a href="/nn-chess">← back to play</a>
+  </p>
+  <p>
+    Watch the agent play a stream of automated games against Stockfish.
+    Every completed game is fed through <code>agent.recordGameResult()</code> —
+    Stockfish games are real games and the agent learns from them, exactly like
+    games against you. Lower the Stockfish skill level to give the agent a
+    fighting chance early on.
+  </p>
+
+  <div style="max-width: 620px; margin: 0 auto;">
+    <SparringGame client:only="react" />
+  </div>
+</BaseLayout>
