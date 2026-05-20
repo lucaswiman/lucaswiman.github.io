@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Board from './Board.js';
 import { TrainingPanel } from './TrainingPanel.js';
 import { InspectorPanel } from './InspectorPanel.js';
+import { SelfPlayPanel } from './SelfPlayPanel.js';
 import {
   initialState,
   applyMove,
@@ -12,9 +13,14 @@ import {
 import type { GameState, Move, Outcome } from '../core/rules/index.js';
 import { encodeState } from '../core/encoding/index.js';
 import type { Agent, GameMoveRecord } from '../core/agent/index.js';
+import type { PlayerImitator } from '../core/imitator/index.js';
 import type { SearchResult } from '../core/mcts/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
-import { createAgentStorage, loadAgentFromStorage } from './agent-config.js';
+import {
+  createAgentStorage,
+  loadAgentFromStorage,
+  loadPlayerImitatorFromStorage,
+} from './agent-config.js';
 import { ENDGAME_PRESETS, ENDGAME_PRESETS_BY_ID } from './endgame-presets.js';
 import {
   LICHESS_CATEGORIES,
@@ -40,6 +46,7 @@ function sessionFromState(state: GameState): GameSession {
 
 export default function Game() {
   const [agent, setAgent] = useState<Agent | null>(null);
+  const [imitator, setImitator] = useState<PlayerImitator | null>(null);
   const [storage] = useState<BlobStorage>(createAgentStorage);
   const [playerColor, setPlayerColor] = useState<PlayerColor>('w');
   const [setupId, setSetupId] = useState<SetupId>('standard');
@@ -118,8 +125,15 @@ export default function Game() {
 
   useEffect(() => {
     let cancelled = false;
-    loadAgentFromStorage(storage)
-      .then(loaded => { if (!cancelled) setAgent(loaded); })
+    Promise.all([
+      loadAgentFromStorage(storage),
+      loadPlayerImitatorFromStorage(storage),
+    ])
+      .then(([loadedAgent, loadedImitator]) => {
+        if (cancelled) return;
+        setAgent(loadedAgent);
+        setImitator(loadedImitator);
+      })
       .catch(err => {
         if (!cancelled) setError(`Failed to load agent: ${err instanceof Error ? err.message : String(err)}`);
       });
@@ -182,10 +196,21 @@ export default function Game() {
 
     recordedRef.current = session;
     agent.recordGameResult(session.history, session.finalOutcome);
-    agent.saveTo(storage).catch(err => {
+
+    // Teach the player-imitator from the user's moves only. The
+    // agent's moves don't belong in the imitator's training set —
+    // the imitator's whole purpose is to model the *user*.
+    if (imitator) {
+      const userMoves = session.history.filter(r => r.sideToMove === playerColor);
+      imitator.recordUserMoves(userMoves, session.finalOutcome);
+    }
+
+    const savePromises: Promise<void>[] = [agent.saveTo(storage)];
+    if (imitator) savePromises.push(imitator.saveTo(storage));
+    Promise.all(savePromises).catch(err => {
       setError(`Failed to save after game: ${err instanceof Error ? err.message : String(err)}`);
     });
-  }, [session, agent, storage]);
+  }, [session, agent, imitator, playerColor, storage]);
 
   const handleMove = useCallback((nextState: GameState, move: Move) => {
     if (!agentRef.current) return;
@@ -261,8 +286,12 @@ export default function Game() {
 
   const handleAgentRefresh = useCallback(async () => {
     try {
-      const reloaded = await loadAgentFromStorage(storage);
-      setAgent(reloaded);
+      const [reloadedAgent, reloadedImitator] = await Promise.all([
+        loadAgentFromStorage(storage),
+        loadPlayerImitatorFromStorage(storage),
+      ]);
+      setAgent(reloadedAgent);
+      setImitator(reloadedImitator);
       setAgentVersion(v => v + 1);
     } catch (err) {
       setError(`Failed to reload agent: ${err instanceof Error ? err.message : String(err)}`);
@@ -480,6 +509,13 @@ export default function Game() {
           />
         </div>
       )}
+
+      <SelfPlayPanel
+        agent={agent}
+        imitator={imitator}
+        storage={storage}
+        onAgentRefresh={handleAgentRefresh}
+      />
 
       <InspectorPanel
         agent={agent}

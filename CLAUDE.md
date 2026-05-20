@@ -37,6 +37,13 @@ Key invariants to preserve when editing nn-chess code:
   `core/`.
 - The only hand-coded chess heuristic is "checkmate is terminal."
   Everything else is learned.
+- Two networks coexist: the AI (`core/agent`, the one the user plays)
+  and the player-imitator (`core/imitator`, a behaviour-clone of the
+  user's moves). The AI trains on real games and on MCTS self-play
+  against the imitator (`core/selfplay`). Pure self-play between two
+  copies of the AI — i.e. self-play not gated by the user-imitator —
+  is still out of scope; the imitator is the piece that keeps the
+  AI's training signal tethered to the user.
 - Core modules are unit-tested with `vitest`.
 - The subproject is structured so it can be lifted into its own
   repository with minimal surgery.
