@@ -15,7 +15,6 @@
 // What this module does NOT do:
 //   - Touch the DOM, window, localStorage, React, or Astro.
 //   - Implement any chess heuristic beyond the rules.
-//   - Generate self-play data (data comes only from real games).
 
 import { encodeState } from '../encoding/index.js';
 import type { GameState, Move, Outcome } from '../rules/index.js';
@@ -248,6 +247,54 @@ export function buildTrainingExamples(
       const idx = policyIndexFromUci(record.move);
       policyTarget[idx] = 1;
     }
+
+    return { features: record.features, valueTarget, policyTarget };
+  });
+}
+
+// ── buildImitationExamples ────────────────────────────────────────────────────
+
+/**
+ * Build training examples for the *player-imitator* network.
+ *
+ * The imitator's job is behaviour-cloning of the user: given a position
+ * the user faced, predict the move the user actually played. That goal
+ * diverges from `buildTrainingExamples` in two ways:
+ *
+ *   - Every move gets a policy target — not just the winner's. We are
+ *     trying to model what the user does, whether or not it works out.
+ *   - Only the user's own move records should be passed in; the agent's
+ *     moves are not part of the imitator's training signal.
+ *
+ * Value target follows the same convention as `buildTrainingExamples`
+ * (outcome from side-to-move's perspective at each position) so the
+ * imitator's value head is still a sensible bootstrap prior for MCTS.
+ *
+ * The caller is responsible for filtering `userMoves` to the user's
+ * side of the game; this function will not double-check.
+ */
+export function buildImitationExamples(
+  userMoves: GameMoveRecord[],
+  finalOutcome: Outcome,
+): TrainingExample[] {
+  if (finalOutcome === 'ongoing') {
+    throw new Error(
+      'buildImitationExamples: finalOutcome is "ongoing" — game is not finished',
+    );
+  }
+
+  return userMoves.map(record => {
+    let valueTarget: number;
+    if (finalOutcome === 'draw') {
+      valueTarget = 0;
+    } else if (finalOutcome === 'white-wins') {
+      valueTarget = record.sideToMove === 'w' ? 1 : -1;
+    } else {
+      valueTarget = record.sideToMove === 'b' ? 1 : -1;
+    }
+
+    const policyTarget = new Float32Array(POLICY_SIZE);
+    policyTarget[policyIndexFromUci(record.move)] = 1;
 
     return { features: record.features, valueTarget, policyTarget };
   });

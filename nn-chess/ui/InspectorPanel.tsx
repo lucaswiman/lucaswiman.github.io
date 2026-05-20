@@ -315,6 +315,7 @@ export function InspectorPanel({
         borderRadius: '6px',
         padding: '10px 14px',
         background: '#f9f9f9',
+        color: '#1a1a1a',
         marginTop: '12px',
       }}
     >

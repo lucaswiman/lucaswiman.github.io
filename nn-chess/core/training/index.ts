@@ -6,23 +6,31 @@
 //
 // Serialization wire format (Uint8Array):
 //   [0..3]   little-endian uint32: byte length of the JSON header
-//   [4..4+H) JSON header: { count, capacity, featureLen, hasPolicyTarget[] }
-//             - count:          number of stored examples
-//             - capacity:       ring capacity
-//             - featureLen:     length of each features Float32Array
-//             - hasPolicyTarget: bool array, one entry per stored example
-//   [4+H..)  raw Float32 payload, tightly packed:
-//             for each example i in insertion order:
-//               features[i]     (featureLen float32s)
-//               valueTarget[i]  (1 float32)
-//               policyTarget[i] (POLICY_SIZE float32s) if hasPolicyTarget[i],
-//                               else nothing
+//   [4..4+H) JSON header:
+//     v2 (current):
+//       { version: 2, count, capacity, featureLen, hasPolicyTarget[] }
+//       Per-example float payload, tightly packed:
+//         features[i]     (featureLen float32s)
+//         valueTarget[i]  (1 float32)
+//         policyIndex[i]  (1 float32) if hasPolicyTarget[i], else nothing
+//       The policy target is reconstituted as a one-hot Float32Array of
+//       length POLICY_SIZE at deserialize time. Storing the index instead
+//       of the dense vector shrinks each winning-side example from ~21 KB
+//       to ~4.6 KB — a ~4.5× reduction overall and the difference between
+//       the buffer fitting in storage or not.
 //
-// `POLICY_SIZE` (4096) is NOT embedded in the header; it is derived at
-// deserialization time from the total byte count and the header metadata.
-// We do store `featureLen` in the header so the format is self-describing
-// even if FEATURE_COUNT changes between versions (a version bump in the
-// encoding/nn module would already invalidate any saved state via META).
+//     v1 (legacy, still readable):
+//       { count, capacity, featureLen, hasPolicyTarget[] }
+//       Per-example payload differed only in the policyTarget block,
+//       which was POLICY_SIZE float32s (the full dense one-hot).
+//
+//   [4+H..)  raw Float32 payload (see per-version layouts above).
+//
+// `POLICY_SIZE` is not embedded in the header; the version determines
+// how to interpret the per-example payload. `featureLen` is stored so
+// the format remains self-describing even if FEATURE_COUNT changes
+// between releases (a version bump in the encoding/nn module already
+// invalidates any saved state via META).
 
 import type { TrainingExample } from '../nn/index.js';
 import { POLICY_SIZE } from '../nn/index.js';
@@ -125,11 +133,32 @@ export function deserializeReplayBuffer(bytes: Uint8Array, capacity: number): Re
 
 // ── Serialization helpers ─────────────────────────────────────────────────────
 
+const SERIAL_VERSION = 2;
+
 interface SerialHeader {
+  /** Wire format version. Omitted in v1 blobs; v2+ always set. */
+  version?: number;
   count: number;
   capacity: number;
   featureLen: number;
   hasPolicyTarget: boolean[];
+}
+
+/**
+ * Return the single 1-hot index in a policy target Float32Array.
+ * `buildTrainingExamples` is the only producer and always constructs a
+ * one-hot, so the first nonzero entry is the answer. We fall back to
+ * argmax if the assumption ever breaks (e.g. a future change introduces
+ * soft policy targets) — the cost is one extra pass per winning example.
+ */
+function policyTargetIndex(pt: Float32Array): number {
+  for (let i = 0; i < pt.length; i++) if (pt[i] === 1) return i;
+  let bestI = 0;
+  let bestV = pt[0];
+  for (let i = 1; i < pt.length; i++) {
+    if (pt[i] > bestV) { bestV = pt[i]; bestI = i; }
+  }
+  return bestI;
 }
 
 function serializeBuffer(examples: TrainingExample[], capacity: number): Uint8Array {
@@ -138,14 +167,19 @@ function serializeBuffer(examples: TrainingExample[], capacity: number): Uint8Ar
 
   const hasPolicyTarget = examples.map(ex => ex.policyTarget !== null);
 
-  const header: SerialHeader = { count, capacity, featureLen, hasPolicyTarget };
+  const header: SerialHeader = {
+    version: SERIAL_VERSION,
+    count,
+    capacity,
+    featureLen,
+    hasPolicyTarget,
+  };
   const headerBytes = new TextEncoder().encode(JSON.stringify(header));
 
-  // Calculate total float32 payload size.
-  // Each example: features (featureLen) + valueTarget (1) + optional policyTarget (POLICY_SIZE)
+  // v2: each example is features + valueTarget + optional policy index (1 float).
   let floatCount = 0;
   for (let i = 0; i < count; i++) {
-    floatCount += featureLen + 1 + (hasPolicyTarget[i] ? POLICY_SIZE : 0);
+    floatCount += featureLen + 1 + (hasPolicyTarget[i] ? 1 : 0);
   }
 
   // Build the float payload in its own buffer (avoids alignment issues when
@@ -159,8 +193,8 @@ function serializeBuffer(examples: TrainingExample[], capacity: number): Uint8Ar
     floatPayload[offset] = ex.valueTarget;
     offset += 1;
     if (hasPolicyTarget[i] && ex.policyTarget !== null) {
-      floatPayload.set(ex.policyTarget, offset);
-      offset += POLICY_SIZE;
+      floatPayload[offset] = policyTargetIndex(ex.policyTarget);
+      offset += 1;
     }
   }
 
@@ -174,6 +208,12 @@ function serializeBuffer(examples: TrainingExample[], capacity: number): Uint8Ar
   return out;
 }
 
+function policyOneHot(index: number): Float32Array {
+  const pt = new Float32Array(POLICY_SIZE);
+  if (index >= 0 && index < POLICY_SIZE) pt[index] = 1;
+  return pt;
+}
+
 function deserializeExamples(bytes: Uint8Array): TrainingExample[] {
   if (bytes.length < 4) return [];
 
@@ -184,6 +224,7 @@ function deserializeExamples(bytes: Uint8Array): TrainingExample[] {
   const header = JSON.parse(new TextDecoder().decode(headerBytes)) as SerialHeader;
 
   const { count, featureLen, hasPolicyTarget } = header;
+  const version = header.version ?? 1;
   if (count === 0) return [];
 
   const payloadStart = 4 + headerLen;
@@ -203,8 +244,15 @@ function deserializeExamples(bytes: Uint8Array): TrainingExample[] {
 
     let policyTarget: Float32Array | null = null;
     if (hasPolicyTarget[i]) {
-      policyTarget = floatView.slice(offset, offset + POLICY_SIZE) as Float32Array;
-      offset += POLICY_SIZE;
+      if (version >= 2) {
+        const idx = floatView[offset];
+        offset += 1;
+        policyTarget = policyOneHot(Math.round(idx));
+      } else {
+        // v1: dense one-hot embedded directly in the payload.
+        policyTarget = floatView.slice(offset, offset + POLICY_SIZE) as Float32Array;
+        offset += POLICY_SIZE;
+      }
     }
 
     examples.push({ features, valueTarget, policyTarget });

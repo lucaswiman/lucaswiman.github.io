@@ -449,6 +449,7 @@ export default function SparringGame() {
             background: '#f5f5f5',
             border: '1px solid #ddd',
             borderRadius: '6px',
+            color: '#1a1a1a',
             fontSize: '0.9em',
           }}
         >
@@ -501,6 +502,7 @@ export default function SparringGame() {
             background: '#eef4ff',
             border: '1px solid #aac',
             borderRadius: '6px',
+            color: '#1a1a1a',
             fontSize: '0.9em',
           }}
         >

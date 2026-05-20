@@ -3,10 +3,12 @@
 > *Candidate tagline for the eventual blog post:* **"Like AlphaZero,
 > but shittier — because it's trained off your moves."**
 
-A browser-based chess game that learns to play **solely from the win/loss
-signal of games it plays against you**. No opening books, no piece-square
-tables, no material counting, no hand-tuned evaluation. The only chess
-knowledge baked into the agent is:
+A browser-based chess game that learns to play **only from games tied
+to the user** — either games the user plays directly against the agent,
+or self-play games against a second network that imitates the user. No
+opening books, no piece-square tables, no material counting, no
+hand-tuned evaluation. The only chess knowledge baked into the agent
+is:
 
 1. The rules of chess (legal moves, check, checkmate, stalemate, draw
    conditions).
@@ -14,14 +16,44 @@ knowledge baked into the agent is:
    heuristic and serves as the terminal reward signal.
 
 Everything else — piece values, tactics, positional understanding — must
-be discovered by the neural network from **games the user plays against
-it**. The agent does **not** self-play to bootstrap; the only training
-signal available to it is the user's own games. Down the road we will
-also let the user point the agent at a known-strong opponent (e.g.
-Stockfish via a worker) and watch it learn from those games, but pure
-self-play between two copies of the agent is deliberately out of scope —
-the whole point of the project is "what happens when a small network
-learns chess from one human's games."
+be discovered by the network from games whose lineage traces back to
+the user's own moves.
+
+### Two networks
+
+The project trains **two** networks side by side:
+
+- **AI network (`agent`)** — the one the user plays against. Trained
+  AlphaZero-style on terminal outcomes: positions of the winning side
+  carry a one-hot policy target, positions of the losing side and
+  draws carry only a value target.
+- **Player-imitator network (`imitator`)** — a behaviour-cloning model
+  of the user. Trained supervised on every move the user plays,
+  regardless of whether the user won, drew, or lost.
+
+After each real game two things happen automatically:
+
+1. The imitator records the user's moves and trains toward "predict
+   what this user would play here."
+2. The user can run a batch of MCTS self-play games between the AI and
+   the imitator; the AI trains on the outcomes the same way it trains
+   on real games.
+
+This is a deliberate departure from the project's original "no
+self-play, ever" rule. The original framing was "what does a tiny net
+look like with one human's worth of data" — but with one human's data,
+the AI never accumulates enough decisive games to learn anything
+beyond move legality. Routing the AI's self-play through a
+user-imitator gives a tractable data-volume boost while keeping the
+learning signal tied to the user: the imitator only knows what the
+user has shown it, so the AI is still effectively training against
+patterns the user has produced. Pure self-play between two copies of
+the AI (i.e. AlphaZero-style bootstrapping without a user-in-the-loop)
+remains out of scope.
+
+Down the road we will also let the user point the agent at a known-
+strong opponent (e.g. Stockfish via a worker) and watch it learn from
+those games.
 
 The app lives at the route **`/nn-chess`** on this site, is built as part
 of the normal Astro / GitHub Actions pipeline, and persists trained
@@ -77,14 +109,18 @@ nn-chess/
 │   ├── mcts/           ← PUCT-style MCTS that consults the NN for
 │   │                     priors + value. Pure functions over a
 │   │                     `GameState` + `Policy` abstraction; no I/O.
-│   ├── training/       ← user-game recorder, replay buffer, training
-│   │                     loop. Takes a `Storage` port (see below).
-│   │                     No self-play loop — training data is the
-│   │                     user's own games (and, later, games against
-│   │                     a configured external opponent).
+│   ├── training/       ← replay buffer + serialization. Takes a
+│   │                     `Storage` port (see below).
 │   ├── storage/        ← `Storage` interface (get/put/list/delete of
 │   │                     opaque blobs keyed by string). Adapters live
 │   │                     outside `core/`.
+│   ├── imitator/       ← player-imitator network (behaviour cloning
+│   │                     of the user). Same shape as the agent's NN,
+│   │                     trained on every user move regardless of
+│   │                     outcome.
+│   ├── selfplay/       ← MCTS-vs-MCTS game runner used to pit the
+│   │                     agent against the imitator and harvest
+│   │                     AlphaZero-style training examples.
 │   └── agent/          ← glues MCTS + NN + (optional) training into a
 │                         single "Agent" object the UI talks to.
 ├── adapters/           ← non-core, environment-specific glue.
@@ -132,66 +168,69 @@ Final choices made when implementing; this is the current shortlist.
 
 ## Reward & training (the only "heuristic")
 
-After a game ends, every position from that game becomes a training
-example for the NN, with the targets derived purely from the outcome:
+There are two learners and they take training data from different
+sources.
 
-**Value target** for a position is the eventual game outcome from the
-side-to-move's perspective:
+### AI network
+
+The AI is trained AlphaZero-style on the outcomes of finished games.
+Two kinds of games feed its replay buffer:
+
+- **Real games** — the user plays the AI; every position from that
+  game becomes a training example.
+- **Self-play games** — the AI plays the player-imitator under MCTS;
+  positions from the AI's side of those games become training
+  examples too.
+
+For each AI training example:
+
+**Value target** is the eventual game outcome from the side-to-move's
+perspective:
 
 - `+1` if the side to move went on to win the game,
 - `−1` if the side to move went on to lose the game,
 - `0` for any draw (stalemate, threefold, 50-move, insufficient
   material).
 
-**Policy target** for a position is the move that was actually played
-from it — *but only if the player who played it won the game*. In
-other words:
+**Policy target** is the move that was actually played from that
+position — *but only if the side that moved went on to win*. Losing-
+side positions and draws contribute value loss only; policy loss is
+skipped. This holds for both real and self-play games, so the
+training pipeline is uniform across both data sources.
 
-- **User wins** ⇒ the user's moves become positive examples for the
-  policy head (the NN learns "in this kind of position, play what the
-  user played"). The AI's moves from that game are not used as policy
-  targets — only the value head sees them, with target `−1`.
-- **AI wins** ⇒ the AI's moves become positive examples for the
-  policy head (standard AlphaZero-style self-improvement, except the
-  data comes from a real game against the user, not self-play). The
-  user's moves from that game are not used as policy targets.
-- **Draw** ⇒ value target is `0` for both sides' positions; we skip
-  the policy loss on draws so we're not reinforcing moves that didn't
-  decisively work.
+### Player-imitator network
 
-This is the *only* learning signal. The NN is doing imitation
-learning of the winner — whoever the winner happens to be — combined
-with standard value-head bootstrapping from terminal outcomes.
+The imitator is a pure behaviour-cloning model of the user. After
+each real game, **every** user move from that game becomes a positive
+example for the imitator's policy head, regardless of whether the
+user won, drew, or lost. The imitator's value head sees the same
+outcome-from-side-to-move signal the AI uses, so it can act as a
+serviceable MCTS leaf evaluator during self-play.
 
-No material count, no mobility, no king safety, no piece-square
-tables. Training is AlphaZero-shaped on the loss side —
+The imitator does **not** train on self-play games. Its only signal
+is the user's own moves.
+
+### Loss & optimization
+
+Both networks share the same architecture and training step:
 `value_loss + policy_loss` (+ small L2) over minibatches sampled
-from a replay buffer — but the buffer is filled **only with games
-the user (or a configured external opponent) actually played against
-the agent**. There is no self-play data-generation loop.
+from each network's own replay buffer. Training is AlphaZero-shaped
+on the loss side; what differs from AlphaZero is the data-generation
+loop (no infinite self-play; everything is gated on real user
+games).
 
-Note one subtle departure from AlphaZero: AlphaZero's policy target
-is the MCTS visit-count distribution at the root, which is
-well-defined for the AI's moves but not for the user's. To keep the
-training pipeline uniform across both kinds of moves, **we use the
-actually-played move as a one-hot policy target** (for both AI and
-human moves), and we only apply the policy loss to positions where
-the player who moved went on to win. This makes the policy head a
-behavior-cloner of the winner.
+### Why this is still not pure bootstrapping
 
-This is a hard constraint, not an oversight: AlphaZero gets away
-with a tiny terminal signal because it generates millions of
-self-play games. We don't, deliberately. The interesting research
-question this project exists to play with is: **how does an MCTS+NN
-agent that only ever sees one person's games against it actually
-play, and what does its learned evaluation look like under
-interpretability tools?** "Like AlphaZero but shittier" is the
-load-bearing frame, not a self-deprecating joke.
+The imitator only ever sees moves the user has actually played, so
+the AI's self-play data is downstream of the user's own play style.
+The AI is not improving against an arbitrary strong opponent — it is
+improving against a learned proxy for *this user*. Strength is bounded
+by what the imitator can squeeze out of the user's moves.
 
-Because the only signal is terminal and the data volume is tiny,
-**early play will be terrible** and that is expected. Resist every
-temptation to "help" by adding self-play, opening books, or a
-material-aware initialization.
+Because the only ground-truth signal is terminal and the data volume
+is tiny, **early play will be terrible** and that is expected. Resist
+every temptation to "help" by adding opening books or a material-
+aware initialization.
 
 ## Roadmap
 
@@ -235,6 +274,10 @@ material-aware initialization.
 
 - Add any chess heuristic to the agent's evaluation, MCTS prior, or
   reward (including "tiny" ones like material count as a tiebreak).
+- Add a self-play loop that is *not* gated by the player-imitator —
+  e.g. AlphaZero-style "two copies of the AI play each other forever"
+  is still out of scope. The imitator-mediated self-play is the only
+  approved kind because it keeps the data tethered to the user.
 - Couple `core/` to `window`, `localStorage`, React, or Astro.
 - Skip tests on `core/` modules.
 - Inline trained weights into the repo. Weights live in the user's

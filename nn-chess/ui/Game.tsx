@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Board from './Board.js';
 import { TrainingPanel } from './TrainingPanel.js';
 import { InspectorPanel } from './InspectorPanel.js';
+import { SelfPlayPanel } from './SelfPlayPanel.js';
+import type { SelfPlayPanelHandle } from './SelfPlayPanel.js';
 import {
   initialState,
   applyMove,
@@ -12,9 +14,16 @@ import {
 import type { GameState, Move, Outcome } from '../core/rules/index.js';
 import { encodeState } from '../core/encoding/index.js';
 import type { Agent, GameMoveRecord } from '../core/agent/index.js';
+import type { PlayerImitator } from '../core/imitator/index.js';
 import type { SearchResult } from '../core/mcts/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
-import { createAgentStorage, loadAgentFromStorage } from './agent-config.js';
+import { getJson, putJson } from '../core/storage/index.js';
+import {
+  createAgentStorage,
+  loadAgentFromStorage,
+  loadPlayerImitatorFromStorage,
+  AUTO_SELFPLAY_PREF_KEY,
+} from './agent-config.js';
 import { ENDGAME_PRESETS, ENDGAME_PRESETS_BY_ID } from './endgame-presets.js';
 import {
   LICHESS_CATEGORIES,
@@ -40,6 +49,7 @@ function sessionFromState(state: GameState): GameSession {
 
 export default function Game() {
   const [agent, setAgent] = useState<Agent | null>(null);
+  const [imitator, setImitator] = useState<PlayerImitator | null>(null);
   const [storage] = useState<BlobStorage>(createAgentStorage);
   const [playerColor, setPlayerColor] = useState<PlayerColor>('w');
   const [setupId, setSetupId] = useState<SetupId>('standard');
@@ -51,13 +61,23 @@ export default function Game() {
   const [error, setError] = useState<string | null>(null);
   const [agentVersion, setAgentVersion] = useState(0);
   const [lastSearch, setLastSearch] = useState<SearchResult | null>(null);
+  // Default true: the brief asks for auto-batching on by default; the
+  // persisted preference (loaded asynchronously below) overrides this
+  // once it lands.
+  const [autoSelfPlay, setAutoSelfPlay] = useState(true);
 
   const agentRef = useRef<Agent | null>(null);
   agentRef.current = agent;
 
+  const selfPlayPanelRef = useRef<SelfPlayPanelHandle | null>(null);
+
   // Prevents double-fire of the agent move under React Strict Mode.
   const agentMoveInFlight = useRef(false);
   const recordedRef = useRef<GameSession | null>(null);
+  // Tracks which finished session has already kicked off auto-self-play.
+  // Distinct from `recordedRef` because the auto-batch is gated on
+  // both the save having been initiated AND the user's preference.
+  const autoBatchedRef = useRef<GameSession | null>(null);
 
   const applyStartingState = useCallback((state: GameState) => {
     agentMoveInFlight.current = false;
@@ -118,12 +138,37 @@ export default function Game() {
 
   useEffect(() => {
     let cancelled = false;
-    loadAgentFromStorage(storage)
-      .then(loaded => { if (!cancelled) setAgent(loaded); })
+    Promise.all([
+      loadAgentFromStorage(storage),
+      loadPlayerImitatorFromStorage(storage),
+    ])
+      .then(([loadedAgent, loadedImitator]) => {
+        if (cancelled) return;
+        setAgent(loadedAgent);
+        setImitator(loadedImitator);
+      })
       .catch(err => {
         if (!cancelled) setError(`Failed to load agent: ${err instanceof Error ? err.message : String(err)}`);
       });
     return () => { cancelled = true; };
+  }, [storage]);
+
+  // Load the auto-self-play preference lazily — if it isn't present
+  // yet (first-ever visit) we keep the default of `true`.
+  useEffect(() => {
+    let cancelled = false;
+    getJson<{ enabled: boolean }>(storage, AUTO_SELFPLAY_PREF_KEY)
+      .then(saved => {
+        if (cancelled || saved === null) return;
+        setAutoSelfPlay(saved.enabled);
+      })
+      .catch(() => { /* preference missing or corrupt — keep default */ });
+    return () => { cancelled = true; };
+  }, [storage]);
+
+  const handleAutoSelfPlayChange = useCallback((enabled: boolean) => {
+    setAutoSelfPlay(enabled);
+    void putJson(storage, AUTO_SELFPLAY_PREF_KEY, { enabled });
   }, [storage]);
 
   useEffect(() => {
@@ -182,10 +227,39 @@ export default function Game() {
 
     recordedRef.current = session;
     agent.recordGameResult(session.history, session.finalOutcome);
-    agent.saveTo(storage).catch(err => {
-      setError(`Failed to save after game: ${err instanceof Error ? err.message : String(err)}`);
-    });
-  }, [session, agent, storage]);
+
+    // Teach the player-imitator from the user's moves only. The
+    // agent's moves don't belong in the imitator's training set —
+    // the imitator's whole purpose is to model the *user*.
+    if (imitator) {
+      const userMoves = session.history.filter(r => r.sideToMove === playerColor);
+      imitator.recordUserMoves(userMoves, session.finalOutcome);
+    }
+
+    const savePromises: Promise<void>[] = [agent.saveTo(storage)];
+    if (imitator) savePromises.push(imitator.saveTo(storage));
+    const sessionSnapshot = session;
+    Promise.all(savePromises)
+      .then(() => {
+        // Only kick the auto-batch AFTER the post-game save lands: the
+        // worker reads weights+replay we just persisted via
+        // agent.saveTo(...) through the serialized handles passed in,
+        // so we want the in-memory `agent` to reflect every recorded
+        // example before we serialize it.
+        if (!autoSelfPlay) return;
+        if (autoBatchedRef.current === sessionSnapshot) return;
+        const handle = selfPlayPanelRef.current;
+        if (!handle || handle.isRunning) return;
+        autoBatchedRef.current = sessionSnapshot;
+        // Fire and forget: the user may start a new game while this
+        // runs. onAgentRefresh re-reads from storage when it finishes,
+        // and that doesn't disturb the in-progress game's session state.
+        void handle.triggerAutoBatch();
+      })
+      .catch(err => {
+        setError(`Failed to save after game: ${err instanceof Error ? err.message : String(err)}`);
+      });
+  }, [session, agent, imitator, playerColor, storage, autoSelfPlay]);
 
   const handleMove = useCallback((nextState: GameState, move: Move) => {
     if (!agentRef.current) return;
@@ -261,8 +335,12 @@ export default function Game() {
 
   const handleAgentRefresh = useCallback(async () => {
     try {
-      const reloaded = await loadAgentFromStorage(storage);
-      setAgent(reloaded);
+      const [reloadedAgent, reloadedImitator] = await Promise.all([
+        loadAgentFromStorage(storage),
+        loadPlayerImitatorFromStorage(storage),
+      ]);
+      setAgent(reloadedAgent);
+      setImitator(reloadedImitator);
       setAgentVersion(v => v + 1);
     } catch (err) {
       setError(`Failed to reload agent: ${err instanceof Error ? err.message : String(err)}`);
@@ -447,6 +525,7 @@ export default function Game() {
             background: '#f0f4ff',
             border: '1px solid #aac',
             borderRadius: '6px',
+            color: '#1a1a1a',
             display: 'flex',
             alignItems: 'center',
             gap: '16px',
@@ -479,6 +558,16 @@ export default function Game() {
           />
         </div>
       )}
+
+      <SelfPlayPanel
+        ref={selfPlayPanelRef}
+        agent={agent}
+        imitator={imitator}
+        storage={storage}
+        onAgentRefresh={handleAgentRefresh}
+        autoEnabled={autoSelfPlay}
+        onAutoEnabledChange={handleAutoSelfPlayChange}
+      />
 
       <InspectorPanel
         agent={agent}
