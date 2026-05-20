@@ -10,6 +10,7 @@ import {
   fromFen,
   sideToMove,
   outcome,
+  toFen,
 } from '../core/rules/index.js';
 import type { GameState, Move, Outcome } from '../core/rules/index.js';
 import { encodeState } from '../core/encoding/index.js';
@@ -32,6 +33,11 @@ import {
   lichessPuzzleUrl,
 } from './lichess-endgames.js';
 import type { LichessPuzzle } from './lichess-endgames.js';
+import {
+  loadPersistedSession,
+  savePersistedSession,
+  type PersistedSession,
+} from './session-persistence.js';
 
 type PlayerColor = 'w' | 'b';
 type SetupId = 'standard' | 'custom' | string;
@@ -41,10 +47,20 @@ interface GameSession {
   history: GameMoveRecord[];
   over: boolean;
   finalOutcome: Outcome | null;
+  // FEN of the position the game started from. Kept so the persisted
+  // session can store `startingFen + moves` instead of every per-move
+  // feature tensor.
+  startingFen: string;
 }
 
 function sessionFromState(state: GameState): GameSession {
-  return { state, history: [], over: false, finalOutcome: null };
+  return {
+    state,
+    history: [],
+    over: false,
+    finalOutcome: null,
+    startingFen: toFen(state),
+  };
 }
 
 export default function Game() {
@@ -65,6 +81,10 @@ export default function Game() {
   // persisted preference (loaded asynchronously below) overrides this
   // once it lands.
   const [autoSelfPlay, setAutoSelfPlay] = useState(true);
+  // Gates the "persist session on change" effect: we only start writing
+  // after the load attempt finishes, so the initial in-memory state
+  // can't overwrite a saved session before we've had a chance to read it.
+  const [sessionLoaded, setSessionLoaded] = useState(false);
 
   const agentRef = useRef<Agent | null>(null);
   agentRef.current = agent;
@@ -171,6 +191,60 @@ export default function Game() {
     void putJson(storage, AUTO_SELFPLAY_PREF_KEY, { enabled });
   }, [storage]);
 
+  // Restore the last in-progress (or just-finished) game from storage.
+  // Runs once on mount. If the saved session is already terminal we
+  // park its reference in `recordedRef` so the game-over effect below
+  // doesn't double-record it into the agent's replay buffer.
+  useEffect(() => {
+    let cancelled = false;
+    loadPersistedSession(storage)
+      .then(restored => {
+        if (cancelled) return;
+        if (restored !== null) {
+          const newSession: GameSession = {
+            state: restored.state,
+            history: restored.history,
+            over: restored.over,
+            finalOutcome: restored.finalOutcome,
+            startingFen: restored.startingFen,
+          };
+          setSession(newSession);
+          setPlayerColor(restored.playerColor);
+          setSetupId(restored.setupId);
+          setCustomFen(restored.customFen);
+          setCurrentPuzzle(restored.currentPuzzle);
+          if (restored.over) {
+            // The game already ended — either it was recorded in the
+            // earlier session, or the tab was closed before the save
+            // landed. Either way, don't re-run training on it.
+            recordedRef.current = newSession;
+          }
+        }
+        setSessionLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) setSessionLoaded(true);
+      });
+    return () => { cancelled = true; };
+  }, [storage]);
+
+  // Mirror the current session + setup back into storage. Gated on
+  // `sessionLoaded` so we don't clobber a saved session before reading
+  // it. Writes are fire-and-forget; on failure the worst case is that
+  // the next reload starts from an earlier checkpoint.
+  useEffect(() => {
+    if (!sessionLoaded) return;
+    const data: PersistedSession = {
+      playerColor,
+      setupId,
+      customFen,
+      currentPuzzle,
+      startingFen: session.startingFen,
+      moves: session.history.map(r => r.move),
+    };
+    void savePersistedSession(storage, data);
+  }, [session, playerColor, setupId, customFen, currentPuzzle, sessionLoaded, storage]);
+
   useEffect(() => {
     if (agent === null) return;
     if (session.over) return;
@@ -208,6 +282,7 @@ export default function Game() {
           history: [...prev.history, record],
           over: gameOver,
           finalOutcome: gameOver ? o : null,
+          startingFen: prev.startingFen,
         };
       });
 
@@ -277,6 +352,7 @@ export default function Game() {
         history: [...prev.history, record],
         over: gameOver,
         finalOutcome: gameOver ? o : null,
+        startingFen: prev.startingFen,
       };
     });
   }, []);
