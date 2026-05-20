@@ -55,6 +55,15 @@ export const SELFPLAY_BATCH_SIZE = 3;
 /** Ply cap for any one self-play game (well under the 75-move rule). */
 export const SELFPLAY_MAX_PLIES = 160;
 
+/** Gradient steps to run on the AI net immediately after a self-play batch. */
+export const SELFPLAY_GRADIENT_STEPS = 10;
+
+/** Minibatch size for those post-batch gradient steps. */
+export const SELFPLAY_GRADIENT_BATCH = 32;
+
+/** Storage key for the "auto-run self-play after each game" user preference. */
+export const AUTO_SELFPLAY_PREF_KEY = 'ui/auto-selfplay';
+
 export function createAgentStorage(): BlobStorage {
   return createIndexedDBAdapter({ prefix: STORAGE_PREFIX });
 }

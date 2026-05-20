@@ -3,6 +3,7 @@ import Board from './Board.js';
 import { TrainingPanel } from './TrainingPanel.js';
 import { InspectorPanel } from './InspectorPanel.js';
 import { SelfPlayPanel } from './SelfPlayPanel.js';
+import type { SelfPlayPanelHandle } from './SelfPlayPanel.js';
 import {
   initialState,
   applyMove,
@@ -16,10 +17,12 @@ import type { Agent, GameMoveRecord } from '../core/agent/index.js';
 import type { PlayerImitator } from '../core/imitator/index.js';
 import type { SearchResult } from '../core/mcts/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
+import { getJson, putJson } from '../core/storage/index.js';
 import {
   createAgentStorage,
   loadAgentFromStorage,
   loadPlayerImitatorFromStorage,
+  AUTO_SELFPLAY_PREF_KEY,
 } from './agent-config.js';
 import { ENDGAME_PRESETS, ENDGAME_PRESETS_BY_ID } from './endgame-presets.js';
 import {
@@ -58,13 +61,23 @@ export default function Game() {
   const [error, setError] = useState<string | null>(null);
   const [agentVersion, setAgentVersion] = useState(0);
   const [lastSearch, setLastSearch] = useState<SearchResult | null>(null);
+  // Default true: the brief asks for auto-batching on by default; the
+  // persisted preference (loaded asynchronously below) overrides this
+  // once it lands.
+  const [autoSelfPlay, setAutoSelfPlay] = useState(true);
 
   const agentRef = useRef<Agent | null>(null);
   agentRef.current = agent;
 
+  const selfPlayPanelRef = useRef<SelfPlayPanelHandle | null>(null);
+
   // Prevents double-fire of the agent move under React Strict Mode.
   const agentMoveInFlight = useRef(false);
   const recordedRef = useRef<GameSession | null>(null);
+  // Tracks which finished session has already kicked off auto-self-play.
+  // Distinct from `recordedRef` because the auto-batch is gated on
+  // both the save having been initiated AND the user's preference.
+  const autoBatchedRef = useRef<GameSession | null>(null);
 
   const applyStartingState = useCallback((state: GameState) => {
     agentMoveInFlight.current = false;
@@ -140,6 +153,24 @@ export default function Game() {
     return () => { cancelled = true; };
   }, [storage]);
 
+  // Load the auto-self-play preference lazily — if it isn't present
+  // yet (first-ever visit) we keep the default of `true`.
+  useEffect(() => {
+    let cancelled = false;
+    getJson<{ enabled: boolean }>(storage, AUTO_SELFPLAY_PREF_KEY)
+      .then(saved => {
+        if (cancelled || saved === null) return;
+        setAutoSelfPlay(saved.enabled);
+      })
+      .catch(() => { /* preference missing or corrupt — keep default */ });
+    return () => { cancelled = true; };
+  }, [storage]);
+
+  const handleAutoSelfPlayChange = useCallback((enabled: boolean) => {
+    setAutoSelfPlay(enabled);
+    void putJson(storage, AUTO_SELFPLAY_PREF_KEY, { enabled });
+  }, [storage]);
+
   useEffect(() => {
     if (agent === null) return;
     if (session.over) return;
@@ -207,10 +238,28 @@ export default function Game() {
 
     const savePromises: Promise<void>[] = [agent.saveTo(storage)];
     if (imitator) savePromises.push(imitator.saveTo(storage));
-    Promise.all(savePromises).catch(err => {
-      setError(`Failed to save after game: ${err instanceof Error ? err.message : String(err)}`);
-    });
-  }, [session, agent, imitator, playerColor, storage]);
+    const sessionSnapshot = session;
+    Promise.all(savePromises)
+      .then(() => {
+        // Only kick the auto-batch AFTER the post-game save lands: the
+        // worker reads weights+replay we just persisted via
+        // agent.saveTo(...) through the serialized handles passed in,
+        // so we want the in-memory `agent` to reflect every recorded
+        // example before we serialize it.
+        if (!autoSelfPlay) return;
+        if (autoBatchedRef.current === sessionSnapshot) return;
+        const handle = selfPlayPanelRef.current;
+        if (!handle || handle.isRunning) return;
+        autoBatchedRef.current = sessionSnapshot;
+        // Fire and forget: the user may start a new game while this
+        // runs. onAgentRefresh re-reads from storage when it finishes,
+        // and that doesn't disturb the in-progress game's session state.
+        void handle.triggerAutoBatch();
+      })
+      .catch(err => {
+        setError(`Failed to save after game: ${err instanceof Error ? err.message : String(err)}`);
+      });
+  }, [session, agent, imitator, playerColor, storage, autoSelfPlay]);
 
   const handleMove = useCallback((nextState: GameState, move: Move) => {
     if (!agentRef.current) return;
@@ -511,10 +560,13 @@ export default function Game() {
       )}
 
       <SelfPlayPanel
+        ref={selfPlayPanelRef}
         agent={agent}
         imitator={imitator}
         storage={storage}
         onAgentRefresh={handleAgentRefresh}
+        autoEnabled={autoSelfPlay}
+        onAutoEnabledChange={handleAutoSelfPlayChange}
       />
 
       <InspectorPanel
