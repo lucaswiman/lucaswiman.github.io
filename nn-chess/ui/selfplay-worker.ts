@@ -47,6 +47,7 @@ self.onmessage = async (event: MessageEvent<SelfPlayRequest>) => {
     aiWeights,
     imitatorWeights,
     replay,
+    imitatorReplay,
     replayCapacity,
     search,
     count,
@@ -72,12 +73,14 @@ self.onmessage = async (event: MessageEvent<SelfPlayRequest>) => {
     return;
   }
 
-  const aiPolicy = policyFromNet(aiNet);
-  const playerPolicy = policyFromNet(imitatorNet);
-
-  const replayBuffer =
+  const aiReplayBuffer =
     replay.length > 0
       ? deserializeReplayBuffer(replay, replayCapacity)
+      : createReplayBuffer(replayCapacity);
+
+  const imitatorReplayBuffer =
+    imitatorReplay.length > 0
+      ? deserializeReplayBuffer(imitatorReplay, replayCapacity)
       : createReplayBuffer(replayCapacity);
 
   // Bridge the worker's `stop` message to runSelfPlayBatch's AbortSignal.
@@ -92,8 +95,42 @@ self.onmessage = async (event: MessageEvent<SelfPlayRequest>) => {
   let games = 0;
   let examplesAdded = 0;
   let finalStep = 0;
+  let imitatorFinalStep = 0;
 
   try {
+    // Phase 1: train the imitator on its own replay buffer so the AI's
+    // self-play opponent reflects the user's most recent moves before any
+    // games are generated. Skip silently when the buffer is too small —
+    // mirrors PlayerImitator.trainStep's own contract.
+    if (imitatorReplayBuffer.size() >= gradientBatchSize && gradientSteps > 0) {
+      const reportEvery = Math.max(1, Math.floor(gradientSteps / 10));
+      for (let step = 0; step < gradientSteps; step++) {
+        if (stopRequested) break;
+
+        const batch = imitatorReplayBuffer.sample(gradientBatchSize);
+        const stepLosses = await imitatorNet.trainBatch(batch);
+        imitatorFinalStep = step + 1;
+
+        if ((step + 1) % reportEvery === 0 || step === gradientSteps - 1) {
+          const msg: SelfPlayResponse = {
+            kind: 'step',
+            phase: 'imitator',
+            stepIndex: step + 1,
+            valueLoss: stepLosses.valueLoss,
+            policyLoss: stepLosses.policyLoss,
+            totalLoss: stepLosses.totalLoss,
+          };
+          self.postMessage(msg);
+        }
+      }
+    }
+
+    // Build MCTS policies AFTER imitator training so the games use the
+    // updated weights.
+    const aiPolicy = policyFromNet(aiNet);
+    const playerPolicy = policyFromNet(imitatorNet);
+
+    // Phase 2: run self-play games.
     const batchResult = await runSelfPlayBatch({
       aiPolicy,
       playerPolicy,
@@ -120,26 +157,25 @@ self.onmessage = async (event: MessageEvent<SelfPlayRequest>) => {
     examplesAdded = batchResult.aiTrainingExamples.length;
 
     for (const ex of batchResult.aiTrainingExamples) {
-      replayBuffer.add(ex);
+      aiReplayBuffer.add(ex);
     }
 
-    // Run gradient steps on the (now enlarged) replay buffer. We are
-    // intentionally lenient: if the buffer is still smaller than
-    // gradientBatchSize, just report 0 steps. The user may have very
-    // few examples at first and the self-play games themselves are
-    // worth keeping regardless.
-    if (replayBuffer.size() >= gradientBatchSize && gradientSteps > 0) {
+    // Phase 3: run gradient steps on the AI's (now enlarged) replay
+    // buffer. Lenient when the buffer is still small — same rationale
+    // as the imitator pass above.
+    if (aiReplayBuffer.size() >= gradientBatchSize && gradientSteps > 0) {
       const reportEvery = Math.max(1, Math.floor(gradientSteps / 10));
       for (let step = 0; step < gradientSteps; step++) {
         if (stopRequested) break;
 
-        const batch = replayBuffer.sample(gradientBatchSize);
+        const batch = aiReplayBuffer.sample(gradientBatchSize);
         const stepLosses = await aiNet.trainBatch(batch);
         finalStep = step + 1;
 
         if ((step + 1) % reportEvery === 0 || step === gradientSteps - 1) {
           const msg: SelfPlayResponse = {
             kind: 'step',
+            phase: 'ai',
             stepIndex: step + 1,
             valueLoss: stepLosses.valueLoss,
             policyLoss: stepLosses.policyLoss,
@@ -159,33 +195,46 @@ self.onmessage = async (event: MessageEvent<SelfPlayRequest>) => {
 
   clearInterval(stopPoll);
 
-  // Serialize fresh AI weights + replay buffer for the round-trip back.
-  let finalWeights: Uint8Array;
+  // Serialize fresh weights + replay buffers for the round-trip back.
+  let finalAiWeights: Uint8Array;
+  let finalImitatorWeights: Uint8Array;
   try {
-    finalWeights = await aiNet.serialize();
+    finalAiWeights = await aiNet.serialize();
+    finalImitatorWeights = await imitatorNet.serialize();
   } catch (err) {
     aiNet.dispose();
     imitatorNet.dispose();
-    postError(`Failed to serialize AI weights after self-play: ${errMessage(err)}`);
+    postError(`Failed to serialize weights after self-play: ${errMessage(err)}`);
     return;
   }
 
-  const finalReplay = replayBuffer.serialize();
+  const finalReplay = aiReplayBuffer.serialize();
+  const finalImitatorReplay = imitatorReplayBuffer.serialize();
 
   const doneMsg: SelfPlayResponse = {
     kind: 'done',
-    aiWeights: finalWeights,
+    aiWeights: finalAiWeights,
+    imitatorWeights: finalImitatorWeights,
     replay: finalReplay,
+    imitatorReplay: finalImitatorReplay,
     games,
     wins,
     losses,
     draws,
     examplesAdded,
     finalStep,
+    imitatorFinalStep,
   };
 
   // Transfer ownership of the underlying ArrayBuffers for zero-copy transfer.
-  self.postMessage(doneMsg, { transfer: [finalWeights.buffer, finalReplay.buffer] });
+  self.postMessage(doneMsg, {
+    transfer: [
+      finalAiWeights.buffer,
+      finalImitatorWeights.buffer,
+      finalReplay.buffer,
+      finalImitatorReplay.buffer,
+    ],
+  });
 
   aiNet.dispose();
   imitatorNet.dispose();

@@ -1,34 +1,43 @@
 // onAgentRefresh round-trips through storage rather than swapping ChessNet
 // state in place — same code path as startup, one extra deserialize is cheap
 // against the training cost.
+//
+// The Train button drives both nets in lockstep: AI from its replay
+// buffer, then imitator from its replay buffer. The AlphaZero-shaped
+// loss is identical for both, and giving the user a single button keeps
+// the framing simple ("train everything you've learned from"). The
+// imitator pass is silently skipped when its buffer is empty.
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import type { Agent } from '../core/agent/index.js';
+import type { PlayerImitator } from '../core/imitator/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
 import { TrainingClient } from './training-client.js';
 import type { DoneCallback, ProgressCallback } from './training-client.js';
 import { AGENT_STORAGE_KEYS } from '../core/agent/index.js';
+import { IMITATOR_STORAGE_KEYS } from '../core/imitator/index.js';
 
 export interface TrainingPanelProps {
   agent: Agent;
+  imitator: PlayerImitator | null;
   storage: BlobStorage;
   onAgentRefresh: () => Promise<void>;
 }
 
 interface TrainProgress {
+  phase: 'ai' | 'imitator';
   stepIndex: number;
   valueLoss: number;
   policyLoss: number;
   totalLoss: number;
 }
 
-export function TrainingPanel({ agent, storage, onAgentRefresh }: TrainingPanelProps) {
+export function TrainingPanel({ agent, imitator, storage, onAgentRefresh }: TrainingPanelProps) {
   const [steps, setSteps] = useState(100);
   const [batchSize, setBatchSize] = useState(32);
   const [training, setTraining] = useState(false);
   const [progress, setProgress] = useState<TrainProgress | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
 
   const clientRef = useRef<TrainingClient | null>(null);
 
@@ -41,17 +50,29 @@ export function TrainingPanel({ agent, storage, onAgentRefresh }: TrainingPanelP
 
   const handleTrain = useCallback(async () => {
     if (training) return;
+    if (!imitator) {
+      // The imitator is loaded alongside the agent at startup, so this
+      // null state is just the initial flash before useEffect resolves.
+      setStatusMsg('Imitator not ready yet — try again in a moment.');
+      return;
+    }
 
     setTraining(true);
     setProgress(null);
     setStatusMsg(null);
 
-    // Serialize current weights and replay buffer to send to the worker.
+    // Serialize current weights and replay buffers for both nets.
     let weights: Uint8Array;
     let replay: Uint8Array;
+    let imitatorWeights: Uint8Array;
+    let imitatorReplay: Uint8Array;
     try {
-      weights = await agent.net.serialize();
+      [weights, imitatorWeights] = await Promise.all([
+        agent.net.serialize(),
+        imitator.net.serialize(),
+      ]);
       replay = agent.replayBuffer.serialize();
+      imitatorReplay = imitator.replayBuffer.serialize();
     } catch (err) {
       setStatusMsg(`Serialization failed: ${err instanceof Error ? err.message : String(err)}`);
       setTraining(false);
@@ -60,6 +81,7 @@ export function TrainingPanel({ agent, storage, onAgentRefresh }: TrainingPanelP
 
     const onProgress: ProgressCallback = (msg) => {
       setProgress({
+        phase: msg.phase,
         stepIndex: msg.stepIndex,
         valueLoss: msg.valueLoss,
         policyLoss: msg.policyLoss,
@@ -68,23 +90,24 @@ export function TrainingPanel({ agent, storage, onAgentRefresh }: TrainingPanelP
     };
 
     const onDone: DoneCallback = async (result) => {
-      setTraining(false);
-      setStatusMsg(`Training done — ${result.finalStep} steps.`);
-
-      // Persist the new weights and replay buffer to storage.
-      setSaving(true);
+      // Persist both nets' new state, then trigger an agent reload so
+      // the in-memory handles match what's on disk.
       try {
         await Promise.all([
           storage.put(AGENT_STORAGE_KEYS.WEIGHTS, result.weights),
           storage.put(AGENT_STORAGE_KEYS.REPLAY, result.replay),
+          storage.put(IMITATOR_STORAGE_KEYS.WEIGHTS, result.imitatorWeights),
+          storage.put(IMITATOR_STORAGE_KEYS.REPLAY, result.imitatorReplay),
         ]);
-        // Reload the agent from storage so it picks up the new weights.
         await onAgentRefresh();
-        setStatusMsg(`Training done — ${result.finalStep} steps. Weights saved and reloaded.`);
+        setStatusMsg(
+          `Training done — AI ${result.finalStep} step(s), ` +
+          `imitator ${result.imitatorFinalStep} step(s). Saved and reloaded.`,
+        );
       } catch (err) {
         setStatusMsg(`Training done but save failed: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
-        setSaving(false);
+        setTraining(false);
       }
     };
 
@@ -101,6 +124,8 @@ export function TrainingPanel({ agent, storage, onAgentRefresh }: TrainingPanelP
       {
         weights,
         replay,
+        imitatorWeights,
+        imitatorReplay,
         replayCapacity: agent.replayBuffer.capacity(),
         batchSize,
         totalSteps: steps,
@@ -110,30 +135,18 @@ export function TrainingPanel({ agent, storage, onAgentRefresh }: TrainingPanelP
       onDone,
       onError,
     );
-  }, [training, agent, storage, batchSize, steps, onAgentRefresh]);
+  }, [training, agent, imitator, storage, batchSize, steps, onAgentRefresh]);
 
   const handleStop = useCallback(() => {
     clientRef.current?.stop();
     // The worker will post 'done' and onDone will set training = false.
   }, []);
 
-  const handleSaveWeights = useCallback(async () => {
-    setSaving(true);
-    setStatusMsg(null);
-    try {
-      await agent.saveTo(storage);
-      setStatusMsg('Weights saved.');
-    } catch (err) {
-      setStatusMsg(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setSaving(false);
-    }
-  }, [agent, storage]);
-
   const bufferSize = agent.replayBuffer.size();
   const bufferCapacity = agent.replayBuffer.capacity();
+  const imitatorBufferSize = imitator?.replayBuffer.size() ?? 0;
 
-  const canTrain = !training && bufferSize >= batchSize;
+  const canTrain = !training && bufferSize >= batchSize && imitator !== null;
 
   return (
     <details
@@ -152,11 +165,20 @@ export function TrainingPanel({ agent, storage, onAgentRefresh }: TrainingPanelP
       <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
         {/* Buffer readout */}
         <div>
-          <strong>Replay buffer:</strong> {bufferSize.toLocaleString()} /{' '}
+          <strong>AI replay buffer:</strong> {bufferSize.toLocaleString()} /{' '}
           {bufferCapacity.toLocaleString()} examples
           {bufferSize < batchSize && (
             <span style={{ color: '#888', marginLeft: '8px', fontSize: '0.9em' }}>
               (need at least {batchSize} to train)
+            </span>
+          )}
+        </div>
+        <div>
+          <strong>Imitator replay buffer:</strong> {imitatorBufferSize.toLocaleString()} /{' '}
+          {bufferCapacity.toLocaleString()} examples
+          {imitatorBufferSize < batchSize && imitatorBufferSize > 0 && (
+            <span style={{ color: '#888', marginLeft: '8px', fontSize: '0.9em' }}>
+              (below batch size — imitator pass will be skipped)
             </span>
           )}
         </div>
@@ -207,20 +229,12 @@ export function TrainingPanel({ agent, storage, onAgentRefresh }: TrainingPanelP
           >
             Stop
           </button>
-          <button
-            type="button"
-            onClick={handleSaveWeights}
-            disabled={saving || training}
-            style={{ padding: '5px 14px', cursor: (!saving && !training) ? 'pointer' : 'not-allowed' }}
-          >
-            Save weights
-          </button>
         </div>
 
         {/* Progress */}
         {training && progress && (
           <div style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
-            Step {progress.stepIndex} / {steps} —{' '}
+            {progress.phase === 'ai' ? 'AI' : 'Imitator'} step {progress.stepIndex} / {steps} —{' '}
             val: {progress.valueLoss.toFixed(4)},{' '}
             pol: {progress.policyLoss.toFixed(4)},{' '}
             total: {progress.totalLoss.toFixed(4)}
@@ -232,7 +246,7 @@ export function TrainingPanel({ agent, storage, onAgentRefresh }: TrainingPanelP
 
         {/* Status message */}
         {statusMsg && (
-          <div style={{ fontSize: '0.9em', color: saving ? '#666' : '#333' }}>
+          <div style={{ fontSize: '0.9em', color: '#333' }}>
             {statusMsg}
           </div>
         )}

@@ -628,6 +628,7 @@ export default function Game() {
         <div style={{ marginTop: '24px' }}>
           <TrainingPanel
             agent={agent}
+            imitator={imitator}
             storage={storage}
             onAgentRefresh={handleAgentRefresh}
             key={agentVersion}
