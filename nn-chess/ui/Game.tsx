@@ -20,6 +20,7 @@ import type { SearchResult } from '../core/mcts/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
 import { getJson, putJson } from '../core/storage/index.js';
 import {
+  AGENT_CONFIG,
   createAgentStorage,
   loadAgentFromStorage,
   loadPlayerImitatorFromStorage,
@@ -83,6 +84,7 @@ export default function Game() {
   // persisted preference (loaded asynchronously below) overrides this
   // once it lands.
   const [autoSelfPlay, setAutoSelfPlay] = useState(true);
+  const [simulations, setSimulations] = useState(AGENT_CONFIG.simulations);
   // Gates the "persist session on change" effect: we only start writing
   // after the load attempt finishes, so the initial in-memory state
   // can't overwrite a saved session before we've had a chance to read it.
@@ -197,6 +199,10 @@ export default function Game() {
     setAutoSelfPlay(enabled);
     void putJson(storage, AUTO_SELFPLAY_PREF_KEY, { enabled });
   }, [storage]);
+
+  useEffect(() => {
+    if (agent) agent.setSimulations(simulations);
+  }, [agent, simulations]);
 
   // Restore the last in-progress (or just-finished) game from storage.
   // Runs once on mount. If the saved session is already terminal we
@@ -592,6 +598,20 @@ export default function Game() {
           />
           {' '}Random
         </label>
+      </div>
+
+      <div style={{ marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center' }}>
+        <strong>Strength:</strong>
+        <input
+          type="range"
+          min={16}
+          max={400}
+          step={16}
+          value={simulations}
+          onChange={e => setSimulations(Number(e.target.value))}
+          style={{ width: '120px' }}
+        />
+        <span style={{ fontSize: '0.9em', color: '#555' }}>{simulations} sims/move</span>
       </div>
 
       <div style={{ marginBottom: '8px', minHeight: '24px' }}>
