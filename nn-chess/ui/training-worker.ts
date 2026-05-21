@@ -20,17 +20,6 @@
 
 import * as tf from '@tensorflow/tfjs';
 import { setWasmPaths } from '@tensorflow/tfjs-backend-wasm';
-
-// Load the WASM binaries from CDN so they don't bloat the app bundle.
-// Fall back to CPU if WASM isn't available (e.g. older browsers).
-setWasmPaths(
-  'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/',
-);
-try {
-  await tf.setBackend('wasm');
-} catch {
-  await tf.setBackend('cpu');
-}
 import { ChessNet, deserialize } from '../core/nn/index.js';
 import {
   createReplayBuffer,
@@ -38,6 +27,21 @@ import {
   type ReplayBuffer,
 } from '../core/training/index.js';
 import type { TrainRequest, TrainResponse } from './training-protocol.js';
+
+// Load the WASM binaries from CDN so they don't bloat the app bundle.
+// Fall back to CPU if WASM isn't available (e.g. older browsers).
+// Stored as a promise so the message handler can await it without
+// requiring top-level await, which is incompatible with IIFE worker bundles.
+const backendReady: Promise<void> = (async () => {
+  setWasmPaths(
+    'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/',
+  );
+  try {
+    await tf.setBackend('wasm');
+  } catch {
+    await tf.setBackend('cpu');
+  }
+})();
 
 // ── Worker state ──────────────────────────────────────────────────────────────
 
@@ -86,6 +90,7 @@ async function trainNet(
 // ── Message handler ───────────────────────────────────────────────────────────
 
 self.onmessage = async (event: MessageEvent<TrainRequest>) => {
+  await backendReady;
   const req = event.data;
 
   if (req.kind === 'stop') {
