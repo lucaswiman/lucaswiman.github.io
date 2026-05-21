@@ -9,9 +9,10 @@
 // — Game.tsx pokes us through the imperative `triggerAutoBatch` handle
 // so there's exactly one worker code path in the app.
 //
-// "Until AI beats imitator" mode keeps firing batches in a loop and
-// checks the AI's non-loss rate against the imitator over a sliding
-// window after each batch; the per-batch worker call is unchanged.
+// "Until AI wins a game" mode keeps firing batches in a loop and stops
+// as soon as the AI wins at least one game against the imitator (or the
+// user clicks Stop, or we hit the hard cap). The per-batch worker call
+// is unchanged; the loop logic lives in this panel.
 //
 // The Stop button aborts between games via the worker's `stop`
 // message; abort between MCTS plies is handled inside the worker.
@@ -40,14 +41,14 @@ import {
 } from './agent-config.js';
 
 /**
- * Hard cap on the "Until AI beats imitator" loop so a stuck run can't
- * keep training forever in the background. Tuned for one user-session's
+ * Hard cap on the "Until AI wins a game" loop so a stuck run can't keep
+ * training forever in the background. Tuned for one user-session's
  * worth of patience: at ~5s per game and 3 games per batch that's
  * roughly 15 minutes of wall time before we give up.
  */
-const UNTIL_BEATS_HARD_CAP = 200;
+const UNTIL_WIN_HARD_CAP = 200;
 
-type Mode = 'fixed' | 'until-beats';
+type Mode = 'fixed' | 'until-win';
 
 type AiResult = 'win' | 'loss' | 'draw';
 
@@ -97,18 +98,18 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
   ) {
     const [mode, setMode] = useState<Mode>('fixed');
     const [batchSize, setBatchSize] = useState(SELFPLAY_BATCH_SIZE);
-    const [thresholdPct, setThresholdPct] = useState(60);
-    const [windowSize, setWindowSize] = useState(20);
     const [running, setRunning] = useState(false);
     const [statusMsg, setStatusMsg] = useState<string | null>(null);
     const [batch, setBatch] = useState<BatchStatus | null>(null);
     const [stepStatus, setStepStatus] = useState<StepStatus | null>(null);
-    // Sliding-window readout for the "Until AI beats imitator" loop.
-    // Lives in component state so the panel re-renders as each batch
-    // lands; the loop itself reads from `loopRef` to avoid stale closures.
+    // Running totals for the "Until AI wins" loop. Lives in component
+    // state so the panel re-renders as each batch lands; the loop itself
+    // reads from refs to avoid stale closures.
     const [loopStats, setLoopStats] = useState<{
       total: number;
-      windowResults: AiResult[];
+      wins: number;
+      losses: number;
+      draws: number;
     } | null>(null);
     // Mirrors loopActiveRef so the buttons can stay disabled (Run) and
     // enabled (Stop) for the full duration of the loop, not just each
@@ -124,13 +125,12 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
     // because the loop must also short-circuit between batches.
     const loopStopRef = useRef(false);
     // True for the lifetime of the "Until" loop, including the windows
-    // between individual batches. See runUntilBeatsLoop for rationale.
+    // between individual batches. See runUntilWinLoop for rationale.
     const loopActiveRef = useRef(false);
-    // Live ring buffer of AI outcomes seen during the current "Until"
-    // loop. Lives in a ref so the loop body can read the up-to-date
-    // window without depending on React state batching.
-    const loopWindowRef = useRef<AiResult[]>([]);
     const loopTotalRef = useRef(0);
+    const loopWinsRef = useRef(0);
+    const loopLossesRef = useRef(0);
+    const loopDrawsRef = useRef(0);
 
     useEffect(() => {
       return () => {
@@ -243,40 +243,38 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
       [agent, imitator, storage, onAgentRefresh],
     );
 
-    // "Until AI beats imitator" loop: fire batches back-to-back and stop
-    // when the rolling non-loss rate clears the threshold, the user hits
-    // Stop, or we hit the hard safety cap.
+    // "Until AI wins a game" loop: fire batches back-to-back and stop
+    // the moment the AI wins any game, the user hits Stop, or we hit
+    // the hard safety cap.
     //
     // We park `loopActiveRef` = true around the whole loop (not just
     // each batch) so the imperative `isRunning` getter — which Game.tsx
     // checks before firing a post-game auto-batch — stays truthy even
     // in the brief windows between batches when runningRef has flipped
     // back to false.
-    const runUntilBeatsLoop = useCallback(async () => {
+    const runUntilWinLoop = useCallback(async () => {
       if (!agent || !imitator) return;
       if (loopActiveRef.current) return;
       loopActiveRef.current = true;
       setLoopActive(true);
       loopStopRef.current = false;
-      loopWindowRef.current = [];
       loopTotalRef.current = 0;
-      setLoopStats({ total: 0, windowResults: [] });
-
-      const threshold = thresholdPct / 100;
-      const win = windowSize;
+      loopWinsRef.current = 0;
+      loopLossesRef.current = 0;
+      loopDrawsRef.current = 0;
+      setLoopStats({ total: 0, wins: 0, losses: 0, draws: 0 });
 
       try {
         while (!loopStopRef.current) {
-          if (loopTotalRef.current >= UNTIL_BEATS_HARD_CAP) {
+          if (loopTotalRef.current >= UNTIL_WIN_HARD_CAP) {
             setStatusMsg(
-              `Stopped: AI did not reach ${thresholdPct}% non-loss over ${win} games ` +
-              `within the ${UNTIL_BEATS_HARD_CAP}-game cap.`,
+              `Stopped: AI did not win a game within the ${UNTIL_WIN_HARD_CAP}-game cap.`,
             );
             break;
           }
 
           // Cap the batch so we don't blow past the hard cap.
-          const remaining = UNTIL_BEATS_HARD_CAP - loopTotalRef.current;
+          const remaining = UNTIL_WIN_HARD_CAP - loopTotalRef.current;
           const gamesThisBatch = Math.max(1, Math.min(batchSize, remaining));
 
           const outcome = await runBatch(gamesThisBatch);
@@ -285,27 +283,33 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
             break;
           }
 
+          let wonThisBatch = false;
           for (const r of outcome.results) {
-            loopWindowRef.current.push(r);
-            if (loopWindowRef.current.length > win) loopWindowRef.current.shift();
             loopTotalRef.current += 1;
+            if (r === 'win') {
+              loopWinsRef.current += 1;
+              wonThisBatch = true;
+            } else if (r === 'loss') {
+              loopLossesRef.current += 1;
+            } else {
+              loopDrawsRef.current += 1;
+            }
           }
           setLoopStats({
             total: loopTotalRef.current,
-            windowResults: loopWindowRef.current.slice(),
+            wins: loopWinsRef.current,
+            losses: loopLossesRef.current,
+            draws: loopDrawsRef.current,
           });
 
           if (loopStopRef.current) break;
 
-          if (loopWindowRef.current.length >= win) {
-            const nonLoss = loopWindowRef.current.filter(r => r !== 'loss').length;
-            if (nonLoss / win >= threshold) {
-              setStatusMsg(
-                `Converged: AI non-loss ${nonLoss}/${win} (≥${thresholdPct}%) ` +
-                `after ${loopTotalRef.current} game(s).`,
-              );
-              break;
-            }
+          if (wonThisBatch) {
+            setStatusMsg(
+              `AI won after ${loopTotalRef.current} game(s) — ` +
+              `${loopWinsRef.current}W ${loopLossesRef.current}L ${loopDrawsRef.current}D.`,
+            );
+            break;
           }
         }
       } finally {
@@ -313,15 +317,15 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
         loopActiveRef.current = false;
         setLoopActive(false);
       }
-    }, [agent, imitator, batchSize, thresholdPct, windowSize, runBatch]);
+    }, [agent, imitator, batchSize, runBatch]);
 
     const handleRun = useCallback(() => {
-      if (mode === 'until-beats') {
-        void runUntilBeatsLoop();
+      if (mode === 'until-win') {
+        void runUntilWinLoop();
       } else {
         void runBatch(batchSize);
       }
-    }, [mode, runBatch, runUntilBeatsLoop, batchSize]);
+    }, [mode, runBatch, runUntilWinLoop, batchSize]);
 
     const handleStop = useCallback(() => {
       // Both flags so the worker tears down its current batch AND the
@@ -386,61 +390,32 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               <input
                 type="radio"
                 name="selfplay-mode"
-                value="until-beats"
-                checked={mode === 'until-beats'}
-                onChange={() => setMode('until-beats')}
+                value="until-win"
+                checked={mode === 'until-win'}
+                onChange={() => setMode('until-win')}
                 disabled={running || loopActive}
               />
-              {' '}Until AI beats imitator
+              {' '}Until AI wins a game
             </label>
           </div>
 
           <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
-            {mode === 'fixed' ? (
-              <label>
-                Games:{' '}
-                <input
-                  type="number"
-                  min={1}
-                  max={50}
-                  value={batchSize}
-                  onChange={e => setBatchSize(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                  style={{ width: '70px' }}
-                  disabled={running || loopActive}
-                />
-              </label>
-            ) : (
-              <>
-                <label>
-                  Target ≥{' '}
-                  <input
-                    type="number"
-                    min={1}
-                    max={100}
-                    value={thresholdPct}
-                    onChange={e => setThresholdPct(Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 1)))}
-                    style={{ width: '60px' }}
-                    disabled={running || loopActive}
-                  />
-                  %
-                </label>
-                <label>
-                  over last{' '}
-                  <input
-                    type="number"
-                    min={1}
-                    max={UNTIL_BEATS_HARD_CAP}
-                    value={windowSize}
-                    onChange={e => setWindowSize(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                    style={{ width: '60px' }}
-                    disabled={running || loopActive}
-                  />
-                  {' '}games
-                </label>
-                <span style={{ fontSize: '0.85em', color: '#666' }}>
-                  (cap: {UNTIL_BEATS_HARD_CAP})
-                </span>
-              </>
+            <label>
+              {mode === 'fixed' ? 'Games:' : 'Games per batch:'}{' '}
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={batchSize}
+                onChange={e => setBatchSize(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                style={{ width: '70px' }}
+                disabled={running || loopActive}
+              />
+            </label>
+            {mode === 'until-win' && (
+              <span style={{ fontSize: '0.85em', color: '#666' }}>
+                (cap: {UNTIL_WIN_HARD_CAP} games)
+              </span>
             )}
             <span style={{ fontSize: '0.85em', color: '#666' }}>
               MCTS sims/move: {SELFPLAY_SEARCH.simulations}
@@ -463,7 +438,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               disabled={running || loopActive || agent === null || imitator === null}
               style={{ padding: '5px 14px', cursor: (running || loopActive) ? 'not-allowed' : 'pointer' }}
             >
-              {mode === 'until-beats' ? 'Run until AI beats imitator' : 'Run self-play batch'}
+              {mode === 'until-win' ? 'Run until AI wins' : 'Run self-play batch'}
             </button>
             <button
               type="button"
@@ -483,10 +458,10 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
             </div>
           )}
 
-          {mode === 'until-beats' && loopStats !== null && (
+          {mode === 'until-win' && loopStats !== null && (
             <div style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
-              Loop: {loopStats.total} game(s) total, last {loopStats.windowResults.length} / {windowSize} —{' '}
-              non-loss {loopStats.windowResults.filter(r => r !== 'loss').length}/{loopStats.windowResults.length}
+              Loop: {loopStats.total} / {UNTIL_WIN_HARD_CAP} —{' '}
+              AI {loopStats.wins}W {loopStats.losses}L {loopStats.draws}D
             </div>
           )}
 
