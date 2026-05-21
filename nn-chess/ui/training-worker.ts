@@ -19,9 +19,18 @@
  */
 
 import * as tf from '@tensorflow/tfjs';
-// WebGL is TF's default backend but it's unreliable in workers (shader
-// linking fails on some mobile GPUs). Force CPU explicitly.
-await tf.setBackend('cpu');
+import { setWasmPaths } from '@tensorflow/tfjs-backend-wasm';
+
+// Load the WASM binaries from CDN so they don't bloat the app bundle.
+// Fall back to CPU if WASM isn't available (e.g. older browsers).
+setWasmPaths(
+  'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/',
+);
+try {
+  await tf.setBackend('wasm');
+} catch {
+  await tf.setBackend('cpu');
+}
 import { ChessNet, deserialize } from '../core/nn/index.js';
 import {
   createReplayBuffer,
