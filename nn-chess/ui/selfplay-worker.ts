@@ -23,6 +23,7 @@ import {
   deserializeReplayBuffer,
 } from '../core/training/index.js';
 import { runSelfPlayBatch } from '../core/selfplay/index.js';
+import { fromFen, type GameState } from '../core/rules/index.js';
 import type { SelfPlayRequest, SelfPlayResponse } from './selfplay-protocol.js';
 
 // ── Worker state ──────────────────────────────────────────────────────────────
@@ -54,7 +55,24 @@ self.onmessage = async (event: MessageEvent<SelfPlayRequest>) => {
     maxPlies,
     gradientSteps,
     gradientBatchSize,
+    temperaturePlies,
+    temperature,
+    startingFens,
   } = req;
+
+  // Pre-parse the curriculum pool once so we don't re-tokenize the same
+  // FEN every game. A bad FEN here aborts the batch — there's no
+  // graceful "skip this position" because we'd be sampling something
+  // the UI was confident enough to send us.
+  let startingStates: GameState[] | null = null;
+  if (startingFens && startingFens.length > 0) {
+    try {
+      startingStates = startingFens.map(fromFen);
+    } catch (err) {
+      postError(`Failed to parse curriculum FEN: ${errMessage(err)}`);
+      return;
+    }
+  }
 
   // Deserialize both networks.
   let aiNet: ChessNet;
@@ -137,6 +155,11 @@ self.onmessage = async (event: MessageEvent<SelfPlayRequest>) => {
       search,
       count,
       maxPlies,
+      temperaturePlies,
+      temperature,
+      startingStateForGame: startingStates
+        ? () => startingStates![Math.floor(Math.random() * startingStates!.length)]
+        : undefined,
       signal: controller.signal,
       onGame: (idx, info) => {
         const msg: SelfPlayResponse = {

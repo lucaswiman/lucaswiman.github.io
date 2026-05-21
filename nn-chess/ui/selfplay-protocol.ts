@@ -22,6 +22,19 @@
 export interface SelfPlaySearchConfig {
   simulations: number;
   cPuct: number;
+  /**
+   * Root-noise alpha for the AlphaZero Dirichlet trick. Enables a noisy
+   * exploration boost at the root of the search tree only; leaving it
+   * undefined disables noise entirely. Standard AlphaZero used 0.3 for
+   * chess.
+   */
+  dirichletAlpha?: number;
+  /**
+   * Mixing weight of the Dirichlet noise with the policy priors at the
+   * root. 0 = no noise, 1 = noise replaces priors. Standard AlphaZero
+   * used 0.25.
+   */
+  dirichletEpsilon?: number;
 }
 
 /**
@@ -55,6 +68,21 @@ export type SelfPlayRequest =
       maxPlies: number;
       gradientSteps: number;
       gradientBatchSize: number;
+      /**
+       * Plies at the start of each game whose move is sampled from the
+       * MCTS visit-count distribution instead of taken greedily. See
+       * `PlayGameConfig.temperaturePlies` in core/selfplay.
+       */
+      temperaturePlies?: number;
+      /** Visit-count sampling temperature. See `PlayGameConfig.temperature`. */
+      temperature?: number;
+      /**
+       * Optional pool of starting FENs. When present, each game's
+       * starting state is sampled uniformly at random from this pool;
+       * when absent, every game starts from the standard initial
+       * position. Used to drive the endgame-curriculum self-play mode.
+       */
+      startingFens?: string[];
     }
   | { kind: 'stop' };
 

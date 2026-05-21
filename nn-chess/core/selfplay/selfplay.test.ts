@@ -8,10 +8,22 @@
 
 import { describe, expect, it } from 'vitest';
 import { POLICY_SIZE, type TrainingExample } from '../nn/index.js';
-import { legalMoves, isTerminal, type GameState, type Move } from '../rules/index.js';
+import { legalMoves, isTerminal, toFen, type GameState, type Move } from '../rules/index.js';
 import { fromFen } from '../rules/index.js';
 import type { Policy } from '../mcts/index.js';
 import { playOneGame, runSelfPlayBatch } from './index.js';
+
+/** Deterministic mulberry32 PRNG — used by tests that need reproducible sampling. */
+function makePrng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s += 0x6d2b79f5;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 function uniformPolicy(value: number): Policy {
   return {
@@ -205,5 +217,147 @@ describe('runSelfPlayBatch', () => {
     // First game finishes; subsequent iterations bail on the signal.
     expect(result.games).toBe(1);
     expect(games).toBe(1);
+  });
+
+  it('uses startingStateForGame to seed each game', async () => {
+    // Two endgame positions; the callback should be invoked once per
+    // game and the resulting moves must respect the starting side-to-
+    // move (white in both). We don't assert which move was played —
+    // only that the game actually started from the curriculum FEN.
+    const start0 = fromFen('4k3/8/8/8/8/8/8/4K3 w - - 0 1');
+    const start1 = fromFen('7k/R7/6K1/8/8/8/8/8 w - - 0 1');
+    const states = [start0, start1];
+    const observed: string[] = [];
+    await runSelfPlayBatch({
+      aiPolicy: uniformPolicy(0),
+      playerPolicy: uniformPolicy(0),
+      search: { simulations: 4, cPuct: 1.5 },
+      count: 2,
+      maxPlies: 1,
+      startingStateForGame: (i) => states[i],
+      onPly: (_gameIndex, info) => {
+        if (info.plyIndex === 0) observed.push(info.fen);
+      },
+    });
+    // Each game's ply-0 FEN should match one of the curriculum FENs
+    // (FEN comparison via toFen normalizes both sides).
+    expect(observed).toHaveLength(2);
+    expect(observed[0]).toBe(toFen(start0));
+    expect(observed[1]).toBe(toFen(start1));
+  });
+});
+
+describe('playOneGame — temperature sampling', () => {
+  // A policy that puts ALL prior on `forcedMove`, so under argmax MCTS
+  // will visit `forcedMove` exclusively and `bestMove` is deterministic.
+  // The point of these tests is to show that visit-count sampling can
+  // diverge from argmax when temperaturePlies > 0 and the visit-count
+  // distribution is non-degenerate.
+  function biasedUniformPolicy(): Policy {
+    return {
+      async evaluate(state: GameState) {
+        if (isTerminal(state)) return { priors: new Map(), value: 0 };
+        const moves = legalMoves(state);
+        const u = 1 / Math.max(moves.length, 1);
+        const priors = new Map<Move, number>(moves.map(m => [m, u]));
+        return { priors, value: 0 };
+      },
+    };
+  }
+
+  it('default behaviour (temperaturePlies = 0) is argmax-everywhere', async () => {
+    // Same RNG, same policy, same starting state — two argmax runs must
+    // produce identical move sequences. This guards against accidental
+    // RNG dependence in the greedy path.
+    const start = fromFen('4k3/8/8/8/8/8/8/4K3 w - - 0 1');
+    const a = await playOneGame({
+      white: biasedUniformPolicy(),
+      black: biasedUniformPolicy(),
+      search: { simulations: 6, cPuct: 1.5, rng: makePrng(1) },
+      startingState: start,
+      maxPlies: 4,
+    });
+    const b = await playOneGame({
+      white: biasedUniformPolicy(),
+      black: biasedUniformPolicy(),
+      search: { simulations: 6, cPuct: 1.5, rng: makePrng(1) },
+      startingState: start,
+      maxPlies: 4,
+    });
+    const movesA = [...a.whiteMoves, ...a.blackMoves].map(r => r.move);
+    const movesB = [...b.whiteMoves, ...b.blackMoves].map(r => r.move);
+    expect(movesA).toEqual(movesB);
+  });
+
+  it('temperature sampling can produce non-argmax moves', async () => {
+    // We construct two runs from the same starting state, with the same
+    // MCTS RNG (so visit counts are identical), but different temperature
+    // RNGs. If the first ply is sampled (temperaturePlies = 1) and the
+    // visit-count distribution has any non-degenerate mass, the two RNGs
+    // will eventually disagree on at least one game's first move.
+    //
+    // We use the standard startpos because there are 20 legal first
+    // moves — vastly more entropy than a bare-king position.
+    const trials = 20;
+    let argmaxFirst: string | null = null;
+    const sampledFirsts = new Set<string>();
+    for (let i = 0; i < trials; i++) {
+      const result = await playOneGame({
+        white: biasedUniformPolicy(),
+        black: biasedUniformPolicy(),
+        search: { simulations: 8, cPuct: 1.5, rng: makePrng(7) },
+        temperaturePlies: 1,
+        temperature: 1.0,
+        rng: makePrng(1000 + i),
+        maxPlies: 1,
+      });
+      const first = result.whiteMoves[0]?.move;
+      expect(first).toBeDefined();
+      sampledFirsts.add(first!);
+    }
+    // Also run an argmax-only baseline to confirm argmax would have
+    // produced a single fixed move.
+    for (let i = 0; i < 3; i++) {
+      const greedy = await playOneGame({
+        white: biasedUniformPolicy(),
+        black: biasedUniformPolicy(),
+        search: { simulations: 8, cPuct: 1.5, rng: makePrng(7) },
+        maxPlies: 1,
+      });
+      if (argmaxFirst === null) argmaxFirst = greedy.whiteMoves[0].move;
+      else expect(greedy.whiteMoves[0].move).toBe(argmaxFirst);
+    }
+    // Sampling should have produced strictly more than one distinct
+    // first move across the trials; otherwise the temperature knob
+    // isn't doing anything.
+    expect(sampledFirsts.size).toBeGreaterThan(1);
+  });
+
+  it('the rng has no effect when temperaturePlies is 0', async () => {
+    // Equivalence check: with sampling disabled, swapping the rng must
+    // not change the move sequence. If this fails, sampling is leaking
+    // into the argmax path.
+    const start = fromFen('4k3/8/8/8/8/8/8/4K3 w - - 0 1');
+    const a = await playOneGame({
+      white: biasedUniformPolicy(),
+      black: biasedUniformPolicy(),
+      search: { simulations: 6, cPuct: 1.5, rng: makePrng(99) },
+      startingState: start,
+      temperaturePlies: 0,
+      rng: makePrng(1),
+      maxPlies: 4,
+    });
+    const b = await playOneGame({
+      white: biasedUniformPolicy(),
+      black: biasedUniformPolicy(),
+      search: { simulations: 6, cPuct: 1.5, rng: makePrng(99) },
+      startingState: start,
+      temperaturePlies: 0,
+      rng: makePrng(2_000_000),
+      maxPlies: 4,
+    });
+    const movesA = [...a.whiteMoves, ...a.blackMoves].map(r => r.move);
+    const movesB = [...b.whiteMoves, ...b.blackMoves].map(r => r.move);
+    expect(movesA).toEqual(movesB);
   });
 });
