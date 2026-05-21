@@ -74,7 +74,12 @@ export class TrainingClient {
 
     const req: TrainRequest = { kind: 'start', ...params };
     // Transfer ownership of the byte buffers to avoid a copy.
-    this.worker.postMessage(req, [params.weights.buffer, params.replay.buffer]);
+    this.worker.postMessage(req, [
+      params.weights.buffer,
+      params.replay.buffer,
+      params.imitatorWeights.buffer,
+      params.imitatorReplay.buffer,
+    ]);
   }
 
   /** Request a graceful stop. The worker will post 'done' before exiting. */

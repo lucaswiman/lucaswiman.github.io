@@ -1,14 +1,17 @@
 // Unit tests for the player-imitator behavioural contract.
-// We test against a stub ChessNet so the suite stays tfjs-free.
+// Most cases use a stub ChessNet so they stay tfjs-free; the final
+// describe-block exercises a real ChessNet to confirm trainStep
+// actually moves the network weights.
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import * as tf from '@tensorflow/tfjs';
 import { createPlayerImitator, IMITATOR_STORAGE_KEYS } from './index.js';
 import { createReplayBuffer } from '../training/index.js';
 import { createMemoryStorage } from '../../adapters/storage-memory.js';
 import { buildImitationExamples, type GameMoveRecord } from '../agent/index.js';
 import {
+  ChessNet,
   POLICY_SIZE,
-  type ChessNet,
   type TrainResult,
   type TrainingExample,
 } from '../nn/index.js';
@@ -147,4 +150,55 @@ describe('PlayerImitator', () => {
       ].sort(),
     );
   });
+});
+
+// Real-ChessNet end-to-end check: after recordUserMoves + trainStep the
+// network's serialized weights actually change. Guards against the bug
+// where trainStep was defined but never called from the UI — that
+// regression would still show null/loss returns from the stub above,
+// but the weights themselves wouldn't move.
+describe('PlayerImitator with a real ChessNet', () => {
+  beforeAll(async () => {
+    await tf.setBackend('cpu');
+    await tf.ready();
+  });
+
+  it('trainStep moves the imitator network weights', async () => {
+    const net = ChessNet.create({ seed: 7 });
+    try {
+      const buf = createReplayBuffer(64);
+      const imitator = createPlayerImitator({ net, replayBuffer: buf });
+
+      // Eight moves so a batch of 4 has enough variety to push gradients.
+      imitator.recordUserMoves(
+        [
+          moveRecord('w', 'e2e4'),
+          moveRecord('w', 'd2d4'),
+          moveRecord('w', 'g1f3'),
+          moveRecord('w', 'b1c3'),
+          moveRecord('w', 'c2c4'),
+          moveRecord('w', 'f2f4'),
+          moveRecord('w', 'a2a4'),
+          moveRecord('w', 'h2h4'),
+        ],
+        'white-wins',
+      );
+
+      const before = await net.serialize();
+      const result = await imitator.trainStep(4);
+      expect(result).not.toBeNull();
+      const after = await net.serialize();
+
+      // Same byte length (architecture unchanged) but different contents
+      // somewhere — i.e. gradient descent moved at least one weight.
+      expect(after.length).toBe(before.length);
+      let differs = false;
+      for (let i = 0; i < before.length; i++) {
+        if (before[i] !== after[i]) { differs = true; break; }
+      }
+      expect(differs).toBe(true);
+    } finally {
+      net.dispose();
+    }
+  }, 30_000);
 });

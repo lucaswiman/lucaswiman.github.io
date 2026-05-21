@@ -84,6 +84,7 @@ export class SelfPlayClient {
       params.aiWeights.buffer,
       params.imitatorWeights.buffer,
       params.replay.buffer,
+      params.imitatorReplay.buffer,
     ]);
   }
 
