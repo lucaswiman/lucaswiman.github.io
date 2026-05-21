@@ -15,7 +15,10 @@
  * bytes back when the batch is done.
  */
 
-import '@tensorflow/tfjs'; // registers CPU backend
+import * as tf from '@tensorflow/tfjs';
+// WebGL is TF's default backend but it's unreliable in workers (shader
+// linking fails on some mobile GPUs). Force CPU explicitly.
+await tf.setBackend('cpu');
 import { ChessNet, deserialize } from '../core/nn/index.js';
 import { policyFromNet } from '../core/agent/index.js';
 import {
