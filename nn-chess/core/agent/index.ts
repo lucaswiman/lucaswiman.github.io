@@ -105,6 +105,9 @@ export interface Agent {
     batchSize: number,
   ): Promise<{ valueLoss: number; policyLoss: number; totalLoss: number } | null>;
 
+  /** Update the MCTS simulation budget for future selectMove calls. */
+  setSimulations(n: number): void;
+
   /** Read-only handles for the UI / interpretability viewer. */
   readonly net: ChessNet;
   readonly replayBuffer: ReplayBuffer;
@@ -353,11 +356,16 @@ export function createAgent(opts: CreateAgentOptions): Agent {
     return net.trainBatch(batch);
   };
 
+  const setSimulations = (n: number): void => {
+    config.simulations = n;
+  };
+
   return {
     selectMove,
     recordGameResult,
     saveTo,
     trainStep,
+    setSimulations,
     get net() { return net; },
     get replayBuffer() { return replayBuffer; },
   };
