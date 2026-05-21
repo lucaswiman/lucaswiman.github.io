@@ -43,10 +43,19 @@ export const AGENT_CONFIG: AgentConfig = {
  * MCTS budget used during self-play between the AI and the imitator.
  * Much cheaper than `AGENT_CONFIG.simulations` because we play many
  * games per batch and don't want the user's tab pinned.
+ *
+ * Dirichlet noise is mixed into the root priors of every search so that
+ * a cold-start net — which has near-uniform priors and value ≈ 0
+ * everywhere — explores a variety of root moves instead of collapsing
+ * onto whichever move has a microscopically larger prior. α=0.3,
+ * ε=0.25 are AlphaZero's chess values; the spec is unchanged, only the
+ * data-generation knob.
  */
 export const SELFPLAY_SEARCH = {
   simulations: 16,
   cPuct: 1.5,
+  dirichletAlpha: 0.3,
+  dirichletEpsilon: 0.25,
 };
 
 /** Default games per self-play batch on a post-game training pass. */
@@ -54,6 +63,20 @@ export const SELFPLAY_BATCH_SIZE = 3;
 
 /** Ply cap for any one self-play game (well under the 75-move rule). */
 export const SELFPLAY_MAX_PLIES = 160;
+
+/**
+ * For the first N plies of each self-play game we sample from the MCTS
+ * visit-count distribution instead of taking the argmax. AlphaZero
+ * used 30 plies for chess; we match that, scaled down implicitly by
+ * the lower simulation count (the relative shape of the distribution
+ * is what matters here, not its absolute counts). Combined with
+ * Dirichlet root noise this is the standard cure for "two pieces
+ * shuffle to a 3-fold draw" in cold-start training games.
+ */
+export const SELFPLAY_TEMPERATURE_PLIES = 30;
+
+/** Visit-count sampling temperature. 1.0 = raw visit counts (AlphaZero). */
+export const SELFPLAY_TEMPERATURE = 1.0;
 
 /** Gradient steps to run on the AI net immediately after a self-play batch. */
 export const SELFPLAY_GRADIENT_STEPS = 10;

@@ -39,8 +39,12 @@ import {
   SELFPLAY_MAX_PLIES,
   SELFPLAY_GRADIENT_STEPS,
   SELFPLAY_GRADIENT_BATCH,
+  SELFPLAY_TEMPERATURE_PLIES,
+  SELFPLAY_TEMPERATURE,
   REPLAY_CAPACITY,
 } from './agent-config.js';
+import { ENDGAME_PRESETS } from './endgame-presets.js';
+import { LICHESS_CATEGORIES } from './lichess-endgames.js';
 
 /**
  * Hard cap on the "Until AI wins a game" loop so a stuck run can't keep
@@ -53,6 +57,42 @@ const UNTIL_WIN_HARD_CAP = 200;
 type Mode = 'fixed' | 'until-win';
 
 type AiResult = 'win' | 'loss' | 'draw';
+
+/**
+ * Curriculum dropdown options. `default` keeps the existing
+ * full-game-from-startpos behaviour; the other entries each describe a
+ * pool of starting FENs that the worker samples uniformly at random
+ * per game.
+ *
+ * `endgame-presets` is the small textbook set (ladder mate, KQ-K, etc.)
+ * — short, forcing, easy ±1 outcomes for the value head. Each
+ * `lichess:<id>` option is one Lichess CC0 category (mateIn1-5, rook
+ * endgames, pawn endgames, ...), all of which give the value head
+ * decisive games inside the ply cap that pure startpos play almost
+ * never produces with a cold-start net.
+ */
+interface CurriculumOption {
+  id: string;
+  label: string;
+  fens: readonly string[];
+}
+
+function buildCurriculumOptions(): CurriculumOption[] {
+  const presets: CurriculumOption = {
+    id: 'endgame-presets',
+    label: `Endgame textbook presets (${ENDGAME_PRESETS.length})`,
+    fens: ENDGAME_PRESETS.map(p => p.fen),
+  };
+  const lichess: CurriculumOption[] = LICHESS_CATEGORIES.map(c => ({
+    id: `lichess:${c.id}`,
+    label: `Lichess: ${c.label} (${c.puzzles.length})`,
+    fens: c.puzzles.map(p => p.fen),
+  }));
+  return [presets, ...lichess];
+}
+
+const CURRICULUM_OPTIONS = buildCurriculumOptions();
+const CURRICULUM_OPTIONS_BY_ID = new Map(CURRICULUM_OPTIONS.map(o => [o.id, o] as const));
 
 export interface SelfPlayPanelProps {
   agent: Agent | null;
@@ -107,6 +147,9 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
   ) {
     const [mode, setMode] = useState<Mode>('fixed');
     const [batchSize, setBatchSize] = useState(SELFPLAY_BATCH_SIZE);
+    // 'default' means "play full chess from startpos"; any other value
+    // selects a curriculum pool (see CURRICULUM_OPTIONS).
+    const [curriculumId, setCurriculumId] = useState<string>('default');
     const [running, setRunning] = useState(false);
     const [statusMsg, setStatusMsg] = useState<string | null>(null);
     const [batch, setBatch] = useState<BatchStatus | null>(null);
@@ -187,6 +230,13 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
 
         const collectedResults: AiResult[] = [];
 
+        // Resolve the curriculum selection to a starting-FEN pool. We
+        // snapshot the array here (not inside the worker callback) so
+        // toggling the dropdown mid-batch can't accidentally swap
+        // pools partway through.
+        const curriculum = CURRICULUM_OPTIONS_BY_ID.get(curriculumId);
+        const startingFens = curriculum ? Array.from(curriculum.fens) : undefined;
+
         return new Promise<RunBatchOutcome | null>((resolve) => {
           clientRef.current!.start(
             {
@@ -200,6 +250,9 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               maxPlies: SELFPLAY_MAX_PLIES,
               gradientSteps: SELFPLAY_GRADIENT_STEPS,
               gradientBatchSize: SELFPLAY_GRADIENT_BATCH,
+              temperaturePlies: SELFPLAY_TEMPERATURE_PLIES,
+              temperature: SELFPLAY_TEMPERATURE,
+              startingFens,
             },
             (game) => {
               collectedResults.push(game.aiResult);
@@ -274,7 +327,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
           );
         });
       },
-      [agent, imitator, storage, onAgentRefresh],
+      [agent, imitator, storage, onAgentRefresh, curriculumId],
     );
 
     // "Until AI wins a game" loop: fire batches back-to-back and stop
@@ -453,6 +506,27 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
             )}
             <span style={{ fontSize: '0.85em', color: '#666' }}>
               MCTS sims/move: {SELFPLAY_SEARCH.simulations}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', fontSize: '0.9em' }}>
+            <label htmlFor="selfplay-curriculum">Starting position:</label>
+            <select
+              id="selfplay-curriculum"
+              value={curriculumId}
+              onChange={e => setCurriculumId(e.target.value)}
+              disabled={running || loopActive}
+              style={{ padding: '3px 6px' }}
+            >
+              <option value="default">Default (full chess game)</option>
+              {CURRICULUM_OPTIONS.map(opt => (
+                <option key={opt.id} value={opt.id}>{opt.label}</option>
+              ))}
+            </select>
+            <span style={{ color: '#666', fontSize: '0.85em' }}>
+              {curriculumId === 'default'
+                ? 'Each game starts from the standard initial position.'
+                : 'Each game starts from a random position in the selected pool.'}
             </span>
           </div>
 
