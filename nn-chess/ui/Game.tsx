@@ -37,6 +37,7 @@ import {
   loadPersistedSession,
   savePersistedSession,
   type PersistedSession,
+  type ColorPreference,
 } from './session-persistence.js';
 
 type PlayerColor = 'w' | 'b';
@@ -68,6 +69,7 @@ export default function Game() {
   const [imitator, setImitator] = useState<PlayerImitator | null>(null);
   const [storage] = useState<BlobStorage>(createAgentStorage);
   const [playerColor, setPlayerColor] = useState<PlayerColor>('w');
+  const [colorPreference, setColorPreference] = useState<ColorPreference>('random');
   const [setupId, setSetupId] = useState<SetupId>('standard');
   const [customFen, setCustomFen] = useState<string>('');
   const [customFenError, setCustomFenError] = useState<string | null>(null);
@@ -124,9 +126,14 @@ export default function Game() {
     return initialState();
   }, [setupId, customFen, currentPuzzle]);
 
+  const pickColor = useCallback((preference: ColorPreference): PlayerColor =>
+    preference === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : preference,
+  []);
+
   const startNewGame = useCallback(() => {
     if (setupId === 'standard') {
       setCurrentPuzzle(null);
+      setPlayerColor(pickColor(colorPreference));
       applyStartingState(initialState());
       return;
     }
@@ -154,7 +161,7 @@ export default function Game() {
       setPlayerColor(sideToMove(state));
       applyStartingState(state);
     }
-  }, [setupId, customFen, applyStartingState]);
+  }, [setupId, customFen, colorPreference, applyStartingState, pickColor]);
 
   useEffect(() => {
     let cancelled = false;
@@ -210,6 +217,7 @@ export default function Game() {
           };
           setSession(newSession);
           setPlayerColor(restored.playerColor);
+          setColorPreference(restored.colorPreference);
           setSetupId(restored.setupId);
           setCustomFen(restored.customFen);
           setCurrentPuzzle(restored.currentPuzzle);
@@ -236,6 +244,7 @@ export default function Game() {
     if (!sessionLoaded) return;
     const data: PersistedSession = {
       playerColor,
+      colorPreference,
       setupId,
       customFen,
       currentPuzzle,
@@ -243,7 +252,7 @@ export default function Game() {
       moves: session.history.map(r => r.move),
     };
     void savePersistedSession(storage, data);
-  }, [session, playerColor, setupId, customFen, currentPuzzle, sessionLoaded, storage]);
+  }, [session, playerColor, colorPreference, setupId, customFen, currentPuzzle, sessionLoaded, storage]);
 
   useEffect(() => {
     if (agent === null) return;
@@ -357,11 +366,12 @@ export default function Game() {
     });
   }, []);
 
-  const handleColorChange = useCallback((color: PlayerColor) => {
-    setPlayerColor(color);
+  const handleColorChange = useCallback((preference: ColorPreference) => {
+    setColorPreference(preference);
+    setPlayerColor(pickColor(preference));
     const starting = startingStateForCurrent();
     if (starting) applyStartingState(starting);
-  }, [startingStateForCurrent, applyStartingState]);
+  }, [startingStateForCurrent, applyStartingState, pickColor]);
 
   const handleSetupChange = useCallback((id: SetupId) => {
     setSetupId(id);
@@ -557,7 +567,7 @@ export default function Game() {
             type="radio"
             name="playerColor"
             value="w"
-            checked={playerColor === 'w'}
+            checked={colorPreference === 'w'}
             onChange={() => handleColorChange('w')}
           />
           {' '}White
@@ -567,10 +577,20 @@ export default function Game() {
             type="radio"
             name="playerColor"
             value="b"
-            checked={playerColor === 'b'}
+            checked={colorPreference === 'b'}
             onChange={() => handleColorChange('b')}
           />
           {' '}Black
+        </label>
+        <label style={{ cursor: 'pointer' }}>
+          <input
+            type="radio"
+            name="playerColor"
+            value="random"
+            checked={colorPreference === 'random'}
+            onChange={() => handleColorChange('random')}
+          />
+          {' '}Random
         </label>
       </div>
 

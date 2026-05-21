@@ -133,17 +133,19 @@ describe('runSelfPlayBatch', () => {
     expect(result.wins + result.losses + result.draws).toBe(4);
   });
 
-  it('alternates colors by default', async () => {
+  it('randomizes colors by default (both sides seen over many games)', async () => {
     const seenColors: ('w' | 'b')[] = [];
+    // 20 games: P(never see 'w' or never see 'b') = 2 * (1/2)^20 ≈ 0.000002
     await runSelfPlayBatch({
       aiPolicy: uniformPolicy(0),
       playerPolicy: uniformPolicy(0),
       search: { simulations: 2, cPuct: 1.5 },
-      count: 4,
+      count: 20,
       maxPlies: 4,
       onGame: (_i, info) => seenColors.push(info.aiColor),
     });
-    expect(seenColors).toEqual(['w', 'b', 'w', 'b']);
+    expect(seenColors).toContain('w');
+    expect(seenColors).toContain('b');
   });
 
   it('AI training examples are well-formed and tagged from the AI side', async () => {
@@ -181,11 +183,11 @@ describe('runSelfPlayBatch', () => {
     });
     // At minimum, each game contributes its starting-position observation.
     expect(observed.length).toBeGreaterThanOrEqual(2);
-    // gameIndex 0 must be aiColor 'w', gameIndex 1 must be 'b' (alternateColors default).
+    // All plies within a single game must share the same aiColor.
     const gameZero = observed.filter(o => o.gameIndex === 0);
     const gameOne = observed.filter(o => o.gameIndex === 1);
-    expect(gameZero.every(o => o.aiColor === 'w')).toBe(true);
-    expect(gameOne.every(o => o.aiColor === 'b')).toBe(true);
+    expect(new Set(gameZero.map(o => o.aiColor)).size).toBe(1);
+    expect(new Set(gameOne.map(o => o.aiColor)).size).toBe(1);
   });
 
   it('honors the abort signal between games', async () => {
