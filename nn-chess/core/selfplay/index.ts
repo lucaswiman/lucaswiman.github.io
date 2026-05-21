@@ -195,7 +195,7 @@ export async function runSelfPlayBatch(
     if (config.signal?.aborted) break;
 
     const aiColor: Color =
-      config.alternateColors === false ? 'w' : (i % 2 === 0 ? 'w' : 'b');
+      config.alternateColors === false ? 'w' : (Math.random() < 0.5 ? 'w' : 'b');
 
     const game = await playOneGame({
       white: aiColor === 'w' ? config.aiPolicy : config.playerPolicy,

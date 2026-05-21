@@ -35,9 +35,11 @@ import type { LichessPuzzle } from './lichess-endgames.js';
 export const LAST_GAME_KEY = 'ui/last-game';
 
 export type PlayerColor = 'w' | 'b';
+export type ColorPreference = 'w' | 'b' | 'random';
 
 export interface PersistedSession {
   playerColor: PlayerColor;
+  colorPreference?: ColorPreference;
   setupId: string;
   customFen: string;
   currentPuzzle: LichessPuzzle | null;
@@ -52,6 +54,7 @@ export interface RestoredSession {
   finalOutcome: Outcome | null;
   startingFen: string;
   playerColor: PlayerColor;
+  colorPreference: ColorPreference;
   setupId: string;
   customFen: string;
   currentPuzzle: LichessPuzzle | null;
@@ -77,6 +80,7 @@ export function restoreSession(saved: PersistedSession): RestoredSession {
     finalOutcome: over ? o : null,
     startingFen: saved.startingFen,
     playerColor: saved.playerColor,
+    colorPreference: saved.colorPreference ?? 'random',
     setupId: saved.setupId,
     customFen: saved.customFen,
     currentPuzzle: saved.currentPuzzle,
