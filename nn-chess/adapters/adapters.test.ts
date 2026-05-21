@@ -207,6 +207,67 @@ sharedSuite('indexedDB adapter', () =>
   createIndexedDBAdapter({ factory: new IDBFactory() }),
 );
 
+// --- IDB adapter: connection resilience -------------------------------------
+//
+// Mobile browsers regularly tear down idle IndexedDB connections (tab
+// suspension, eviction, version upgrade in another tab). The adapter
+// caches its IDBDatabase handle, so a torn-down handle must be detected
+// and replaced — otherwise the next operation fails with "The database
+// connection is closing." We reproduce that scenario by forcibly
+// closing the connection from outside the adapter and verifying that
+// subsequent operations transparently re-open.
+
+// Tracks every IDBDatabase the adapter opens so a test can close them
+// out from under the adapter. Implements just enough of IDBFactory for
+// the adapter's needs; other methods proxy through.
+class TrackingFactory implements IDBFactory {
+  readonly opened: IDBDatabase[] = [];
+
+  constructor(private readonly inner: IDBFactory) {}
+
+  open(name: string, version?: number): IDBOpenDBRequest {
+    const req = this.inner.open(name, version);
+    req.addEventListener('success', () => {
+      if (req.result) this.opened.push(req.result);
+    });
+    return req;
+  }
+
+  deleteDatabase(name: string): IDBOpenDBRequest {
+    return this.inner.deleteDatabase(name);
+  }
+
+  cmp(first: unknown, second: unknown): number {
+    return this.inner.cmp(first, second);
+  }
+
+  databases(): Promise<IDBDatabaseInfo[]> {
+    return this.inner.databases();
+  }
+}
+
+describe('indexedDB adapter: connection resilience', () => {
+  it('recovers when the cached connection is closed externally', async () => {
+    const tracking = new TrackingFactory(new IDBFactory());
+    const s = createIndexedDBAdapter({ factory: tracking });
+
+    // Prime: this open populates `tracking.opened` and caches the handle
+    // inside the adapter.
+    await s.put('a', new Uint8Array([1, 2, 3]));
+    expect(tracking.opened.length).toBeGreaterThanOrEqual(1);
+    const opensBefore = tracking.opened.length;
+
+    // Simulate the browser tearing the connection down underneath us.
+    for (const db of tracking.opened) db.close();
+
+    // The adapter must transparently re-open and continue serving.
+    await s.put('b', new Uint8Array([4, 5, 6]));
+    expect(await s.get('a')).toEqual(new Uint8Array([1, 2, 3]));
+    expect(await s.get('b')).toEqual(new Uint8Array([4, 5, 6]));
+    expect(tracking.opened.length).toBeGreaterThan(opensBefore);
+  });
+});
+
 sharedSuite(
   'namespaced(memory)',
   () => namespaced(createMemoryStorage(), 'scope'),
