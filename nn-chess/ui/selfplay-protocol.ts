@@ -61,6 +61,9 @@ export type SelfPlayRequest =
 /**
  * Messages sent FROM the worker TO the main thread.
  *
+ * `ply`   — emitted once per board state inside a self-play game (one for
+ *           the starting position, then one per move). Used by the UI to
+ *           render a live board; pure background runs ignore it.
  * `game`  — one self-play game finished.
  * `step`  — periodic gradient-step progress report. `phase` distinguishes
  *           the imitator pre-train pass from the AI post-train pass.
@@ -69,6 +72,14 @@ export type SelfPlayRequest =
  * `error` — something went wrong; the worker is now idle.
  */
 export type SelfPlayResponse =
+  | {
+      kind: 'ply';
+      gameIndex: number;
+      aiColor: 'w' | 'b';
+      plyIndex: number;
+      fen: string;
+      lastMove: string | null;
+    }
   | {
       kind: 'game';
       index: number;

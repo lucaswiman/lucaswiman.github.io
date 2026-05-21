@@ -72,6 +72,30 @@ describe('playOneGame', () => {
     expect(Math.abs(result.whiteMoves.length - result.blackMoves.length)).toBeLessThanOrEqual(1);
   });
 
+  it('emits an onPly observation for the starting position and each move', async () => {
+    const start = fromFen('4k3/8/8/8/8/8/8/4K3 w - - 0 1');
+    const observed: Array<{ plyIndex: number; lastMove: Move | null; fen: string }> = [];
+    const result = await playOneGame({
+      white: uniformPolicy(0),
+      black: uniformPolicy(0),
+      search: { simulations: 2, cPuct: 1.5 },
+      startingState: start,
+      maxPlies: 4,
+      onPly: (info) => observed.push(info),
+    });
+    // One observation for the starting position plus one per ply played.
+    expect(observed).toHaveLength(result.plies + 1);
+    expect(observed[0].plyIndex).toBe(0);
+    expect(observed[0].lastMove).toBeNull();
+    // Starting FEN matches the position we passed in.
+    expect(observed[0].fen.startsWith('4k3/8/8/8/8/8/8/4K3 w')).toBe(true);
+    // Subsequent entries have monotonically-increasing plyIndex and a non-null move.
+    for (let i = 1; i < observed.length; i++) {
+      expect(observed[i].plyIndex).toBe(i);
+      expect(observed[i].lastMove).not.toBeNull();
+    }
+  });
+
   it('aborts cleanly when the signal fires', async () => {
     const controller = new AbortController();
     const start = fromFen('4k3/8/8/8/8/8/8/4K3 w - - 0 1');
@@ -139,6 +163,29 @@ describe('runSelfPlayBatch', () => {
         expect(ex.policyTarget.length).toBe(POLICY_SIZE);
       }
     }
+  });
+
+  it('threads onPly through with the per-game AI color attached', async () => {
+    const observed: Array<{ gameIndex: number; aiColor: 'w' | 'b'; plyIndex: number }> = [];
+    await runSelfPlayBatch({
+      aiPolicy: uniformPolicy(0),
+      playerPolicy: uniformPolicy(0),
+      search: { simulations: 2, cPuct: 1.5 },
+      count: 2,
+      maxPlies: 2,
+      onPly: (gameIndex, info) => observed.push({
+        gameIndex,
+        aiColor: info.aiColor,
+        plyIndex: info.plyIndex,
+      }),
+    });
+    // At minimum, each game contributes its starting-position observation.
+    expect(observed.length).toBeGreaterThanOrEqual(2);
+    // gameIndex 0 must be aiColor 'w', gameIndex 1 must be 'b' (alternateColors default).
+    const gameZero = observed.filter(o => o.gameIndex === 0);
+    const gameOne = observed.filter(o => o.gameIndex === 1);
+    expect(gameZero.every(o => o.aiColor === 'w')).toBe(true);
+    expect(gameOne.every(o => o.aiColor === 'b')).toBe(true);
   });
 
   it('honors the abort signal between games', async () => {

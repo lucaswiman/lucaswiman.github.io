@@ -27,6 +27,7 @@ export type GameCallback = (game: Extract<SelfPlayResponse, { kind: 'game' }>) =
 export type StepCallback = (step: Extract<SelfPlayResponse, { kind: 'step' }>) => void;
 export type DoneCallback = (result: Extract<SelfPlayResponse, { kind: 'done' }>) => void;
 export type ErrorCallback = (message: string) => void;
+export type PlyCallback = (ply: Extract<SelfPlayResponse, { kind: 'ply' }>) => void;
 
 export class SelfPlayClient {
   private worker: Worker | null = null;
@@ -49,6 +50,7 @@ export class SelfPlayClient {
     onStep: StepCallback,
     onDone: DoneCallback,
     onError: ErrorCallback,
+    onPly?: PlyCallback,
   ): void {
     // Tear down any existing worker before starting a new one.
     this.stop();
@@ -64,6 +66,8 @@ export class SelfPlayClient {
         onGame(msg);
       } else if (msg.kind === 'step') {
         onStep(msg);
+      } else if (msg.kind === 'ply') {
+        onPly?.(msg);
       } else if (msg.kind === 'done') {
         onDone(msg);
         this._cleanup();
