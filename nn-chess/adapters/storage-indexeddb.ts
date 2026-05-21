@@ -41,6 +41,17 @@ function awaitRequest<T>(req: IDBRequest<T>): Promise<T> {
   });
 }
 
+// Classify the error thrown when we try to use a connection the browser
+// has already closed. The spec-mandated synchronous throw from
+// `db.transaction()` in that case is a DOMException named
+// `InvalidStateError`; the message check is a fallback for browsers
+// that surface the same condition under a different name.
+function isTransientConnectionError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === 'InvalidStateError') return true;
+  return /database connection is clos(ing|ed)/i.test(err.message);
+}
+
 /**
  * Returns a BlobStorage backed by IndexedDB. The database connection is
  * opened lazily on the first operation so the adapter is safe to
@@ -72,27 +83,61 @@ export function createIndexedDBAdapter(
   let dbPromise: Promise<IDBDatabase> | null = null;
   const getDb = (): Promise<IDBDatabase> => {
     if (dbPromise !== null) return dbPromise;
-    dbPromise = new Promise((resolve, reject) => {
-      let factory: IDBFactory;
-      try { factory = getFactory(); } catch (err) { reject(err); return; }
-      const req = factory.open(dbName, 1);
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains(storeName)) {
-          db.createObjectStore(storeName);
-        }
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-      req.onblocked = () => reject(new Error('IndexedDB open blocked'));
+
+    // Deferred-resolution pattern so the success/error/blocked handlers
+    // below can refer to `promise` for the "is this still the live
+    // handle?" guard inside `invalidate`. Without that guard, a late
+    // close event from an old connection would clobber a brand-new
+    // cached promise.
+    let resolveDb!: (db: IDBDatabase) => void;
+    let rejectDb!: (err: unknown) => void;
+    const promise = new Promise<IDBDatabase>((resolve, reject) => {
+      resolveDb = resolve;
+      rejectDb = reject;
     });
-    // If the open fails, clear the cached promise so subsequent calls
-    // get a fresh attempt rather than a permanently-broken handle.
-    dbPromise.catch(() => { dbPromise = null; });
-    return dbPromise;
+    dbPromise = promise;
+    const invalidate = (): void => {
+      if (dbPromise === promise) dbPromise = null;
+    };
+
+    let factory: IDBFactory;
+    try {
+      factory = getFactory();
+    } catch (err) {
+      invalidate();
+      rejectDb(err);
+      return promise;
+    }
+
+    const req = factory.open(dbName, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(storeName)) {
+        db.createObjectStore(storeName);
+      }
+    };
+    req.onsuccess = () => {
+      const db = req.result;
+      // Proactive invalidation: when the browser tears down the
+      // connection (mobile tab suspension, storage eviction, app
+      // backgrounding) `onclose` fires and we drop the stale handle so
+      // the next operation transparently re-opens. `onversionchange`
+      // fires when another tab/connection wants to upgrade the schema;
+      // we close ours so the upgrade can proceed instead of blocking.
+      db.onclose = () => invalidate();
+      db.onversionchange = () => {
+        db.close();
+        invalidate();
+      };
+      resolveDb(db);
+    };
+    req.onerror = () => { invalidate(); rejectDb(req.error); };
+    req.onblocked = () => { invalidate(); rejectDb(new Error('IndexedDB open blocked')); };
+
+    return promise;
   };
 
-  const withStore = async <T>(
+  const runTx = async <T>(
     mode: IDBTransactionMode,
     fn: (store: IDBObjectStore) => Promise<T>,
   ): Promise<T> => {
@@ -106,6 +151,25 @@ export function createIndexedDBAdapter(
       tx.onabort = () => reject(tx.error ?? new Error('IDB transaction aborted'));
     });
     return result;
+  };
+
+  const withStore = async <T>(
+    mode: IDBTransactionMode,
+    fn: (store: IDBObjectStore) => Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await runTx(mode, fn);
+    } catch (err) {
+      // Reactive recovery: if `db.transaction()` (or the transaction
+      // itself) failed because the connection was already in the
+      // closing/closed state — typically because the browser closed it
+      // silently between operations — drop the stale cached handle and
+      // retry exactly once with a fresh connection. Anything else
+      // (quota, real read/write errors) bubbles up unchanged.
+      if (!isTransientConnectionError(err)) throw err;
+      dbPromise = null;
+      return await runTx(mode, fn);
+    }
   };
 
   return {

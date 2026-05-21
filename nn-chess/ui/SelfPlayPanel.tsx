@@ -30,6 +30,8 @@ import type { PlayerImitator } from '../core/imitator/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
 import { AGENT_STORAGE_KEYS } from '../core/agent/index.js';
 import { IMITATOR_STORAGE_KEYS } from '../core/imitator/index.js';
+import { fromFen, type GameState } from '../core/rules/index.js';
+import Board from './Board.js';
 import { SelfPlayClient } from './selfplay-client.js';
 import {
   SELFPLAY_SEARCH,
@@ -87,6 +89,13 @@ interface StepStatus {
   totalLoss: number;
 }
 
+interface LivePly {
+  gameIndex: number;
+  aiColor: 'w' | 'b';
+  plyIndex: number;
+  state: GameState;
+}
+
 interface RunBatchOutcome {
   results: AiResult[];
 }
@@ -102,6 +111,10 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
     const [statusMsg, setStatusMsg] = useState<string | null>(null);
     const [batch, setBatch] = useState<BatchStatus | null>(null);
     const [stepStatus, setStepStatus] = useState<StepStatus | null>(null);
+    // Live position rendered by <Board> while a batch is in flight. Set
+    // by the worker's `ply` callback after every move; cleared when a
+    // batch fully finishes so the board doesn't linger on a stale game.
+    const [livePly, setLivePly] = useState<LivePly | null>(null);
     // Running totals for the "Until AI wins" loop. Lives in component
     // state so the panel re-renders as each batch lands; the loop itself
     // reads from refs to avoid stale closures.
@@ -147,6 +160,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
         runningRef.current = true;
         setStatusMsg(null);
         setStepStatus(null);
+        setLivePly(null);
         setBatch({ played: 0, wins: 0, losses: 0, draws: 0, examples: 0 });
 
         let aiWeights: Uint8Array;
@@ -228,6 +242,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               } finally {
                 setRunning(false);
                 runningRef.current = false;
+                setLivePly(null);
                 resolve({ results: collectedResults });
               }
             },
@@ -235,7 +250,26 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               setStatusMsg(`Self-play failed: ${msg}`);
               setRunning(false);
               runningRef.current = false;
+              setLivePly(null);
               resolve(null);
+            },
+            (ply) => {
+              // Parse the FEN once per ply on the main thread. With ~80–120
+              // plies per game and batches of ~3 games this is negligible
+              // compared to MCTS, and keeps the Board's controlled state
+              // type the same as everywhere else in the app.
+              try {
+                setLivePly({
+                  gameIndex: ply.gameIndex,
+                  aiColor: ply.aiColor,
+                  plyIndex: ply.plyIndex,
+                  state: fromFen(ply.fen),
+                });
+              } catch {
+                // A bad FEN here would only break the live preview; the
+                // training side already has its own copy of the state.
+                // Swallow rather than abort the batch.
+              }
             },
           );
         });
@@ -450,6 +484,10 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
             </button>
           </div>
 
+          {livePly !== null && (
+            <LiveBoard livePly={livePly} />
+          )}
+
           {batch !== null && (
             <div style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
               Game {batch.played} —{' '}
@@ -481,3 +519,35 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
     );
   },
 );
+
+/**
+ * Compact live-board view for the current self-play game.
+ *
+ * Orientation tracks the AI's color so the AI is always at the bottom
+ * of the rendered board — this keeps the side labels stable across
+ * games regardless of which color the AI was assigned this round.
+ */
+function LiveBoard({ livePly }: { livePly: LivePly }) {
+  const aiColorLabel = livePly.aiColor === 'w' ? 'White' : 'Black';
+  const imitatorColorLabel = livePly.aiColor === 'w' ? 'Black' : 'White';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'center' }}>
+      <div style={{ fontSize: '0.85em', color: '#555' }}>
+        Game {livePly.gameIndex + 1} — ply {livePly.plyIndex}
+      </div>
+      <div style={{ fontSize: '0.85em', fontWeight: 'bold', color: '#333' }}>
+        Imitator ({imitatorColorLabel})
+      </div>
+      <div style={{ width: '100%', maxWidth: '320px' }}>
+        <Board
+          state={livePly.state}
+          interactive={false}
+          boardOrientation={livePly.aiColor === 'w' ? 'white' : 'black'}
+        />
+      </div>
+      <div style={{ fontSize: '0.85em', fontWeight: 'bold', color: '#333' }}>
+        AI ({aiColorLabel})
+      </div>
+    </div>
+  );
+}

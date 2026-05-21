@@ -148,6 +148,17 @@ self.onmessage = async (event: MessageEvent<SelfPlayRequest>) => {
         };
         self.postMessage(msg);
       },
+      onPly: (gameIndex, info) => {
+        const msg: SelfPlayResponse = {
+          kind: 'ply',
+          gameIndex,
+          aiColor: info.aiColor,
+          plyIndex: info.plyIndex,
+          fen: info.fen,
+          lastMove: info.lastMove,
+        };
+        self.postMessage(msg);
+      },
     });
 
     games = batchResult.games;

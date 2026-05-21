@@ -18,8 +18,10 @@ import {
   isTerminal,
   outcome,
   sideToMove,
+  toFen,
   type Color,
   type GameState,
+  type Move,
   type Outcome,
 } from '../rules/index.js';
 import {
@@ -58,6 +60,13 @@ export interface PlayGameConfig {
   startingState?: GameState;
   /** Abort the game between plies. The half-finished game returns 'draw'. */
   signal?: AbortSignal;
+  /**
+   * Optional per-ply observer. Fires once with `plyIndex = 0` and
+   * `lastMove = null` for the starting position, then once after each
+   * move with the post-move FEN. Used by the UI to render a live board
+   * during self-play; the core loop itself does not depend on it.
+   */
+  onPly?: (info: { fen: string; plyIndex: number; lastMove: Move | null }) => void;
 }
 
 export interface PlayGameResult {
@@ -85,6 +94,10 @@ export async function playOneGame(
   const blackMoves: GameMoveRecord[] = [];
   const maxPlies = config.maxPlies ?? 240;
 
+  // Announce the starting position before any moves have been played
+  // so the observer can render the board immediately.
+  config.onPly?.({ fen: toFen(state), plyIndex: 0, lastMove: null });
+
   let plies = 0;
   while (plies < maxPlies && !isTerminal(state)) {
     if (config.signal?.aborted) break;
@@ -102,6 +115,7 @@ export async function playOneGame(
 
     state = applyMove(state, move);
     plies++;
+    config.onPly?.({ fen: toFen(state), plyIndex: plies, lastMove: move });
 
     // Yield to the event loop between plies so the UI thread is not
     // starved for several seconds on phones.
@@ -134,6 +148,16 @@ export interface SelfPlayBatchConfig {
     aiColor: Color;
     aiResult: SideResult;
     plies: number;
+  }) => void;
+  /**
+   * Optional per-ply observer, scoped to the current game. Used by the
+   * UI to render a live board; pure training callers can leave it unset.
+   */
+  onPly?: (gameIndex: number, info: {
+    aiColor: Color;
+    fen: string;
+    plyIndex: number;
+    lastMove: Move | null;
   }) => void;
   /** Abort the batch between games. The current game finishes. */
   signal?: AbortSignal;
@@ -179,6 +203,9 @@ export async function runSelfPlayBatch(
       search: config.search,
       maxPlies: config.maxPlies,
       signal: config.signal,
+      onPly: config.onPly
+        ? (info) => config.onPly!(i, { aiColor, ...info })
+        : undefined,
     });
 
     const aiMoves = aiColor === 'w' ? game.whiteMoves : game.blackMoves;
