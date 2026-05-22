@@ -40,9 +40,10 @@ export const AGENT_CONFIG: AgentConfig = {
 };
 
 /**
- * MCTS budget used during self-play between the AI and the imitator.
- * Much cheaper than `AGENT_CONFIG.simulations` because we play many
- * games per batch and don't want the user's tab pinned.
+ * MCTS hyperparameters used during self-play between the AI and the
+ * imitator. The simulation count is sourced from the in-game MCTS
+ * sims slider at call sites — `simulations` here is only a fallback
+ * default for any code path that doesn't have access to the slider.
  *
  * Dirichlet noise is mixed into the root priors of every search so that
  * a cold-start net — which has near-uniform priors and value ≈ 0

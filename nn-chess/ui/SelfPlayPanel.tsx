@@ -102,6 +102,13 @@ export interface SelfPlayPanelProps {
   onAgentRefresh: () => Promise<void>;
   autoEnabled: boolean;
   onAutoEnabledChange: (enabled: boolean) => void;
+  /**
+   * MCTS sims/move to use for self-play. Sourced from the same slider
+   * that controls the in-game agent so a single knob covers both.
+   * Defaults from `SELFPLAY_SEARCH.simulations` are no longer applied
+   * here — the caller is the source of truth.
+   */
+  simulations: number;
 }
 
 export interface SelfPlayPanelHandle {
@@ -142,7 +149,7 @@ interface RunBatchOutcome {
 
 export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>(
   function SelfPlayPanel(
-    { agent, imitator, storage, onAgentRefresh, autoEnabled, onAutoEnabledChange },
+    { agent, imitator, storage, onAgentRefresh, autoEnabled, onAutoEnabledChange, simulations },
     ref,
   ) {
     const [mode, setMode] = useState<Mode>('fixed');
@@ -245,7 +252,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               replay,
               imitatorReplay,
               replayCapacity: REPLAY_CAPACITY,
-              search: SELFPLAY_SEARCH,
+              search: { ...SELFPLAY_SEARCH, simulations },
               count: gamesToPlay,
               maxPlies: SELFPLAY_MAX_PLIES,
               gradientSteps: SELFPLAY_GRADIENT_STEPS,
@@ -327,7 +334,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
           );
         });
       },
-      [agent, imitator, storage, onAgentRefresh, curriculumId],
+      [agent, imitator, storage, onAgentRefresh, curriculumId, simulations],
     );
 
     // "Until AI wins a game" loop: fire batches back-to-back and stop
@@ -505,7 +512,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               </span>
             )}
             <span style={{ fontSize: '0.85em', color: '#666' }}>
-              MCTS sims/move: {SELFPLAY_SEARCH.simulations}
+              MCTS sims/move: {simulations}
             </span>
           </div>
 
