@@ -88,6 +88,14 @@ export const SELFPLAY_GRADIENT_BATCH = 32;
 /** Storage key for the "auto-run self-play after each game" user preference. */
 export const AUTO_SELFPLAY_PREF_KEY = 'ui/auto-selfplay';
 
+/**
+ * Storage key for the "render the live board during training" user
+ * preference. When off, the worker skips emitting per-ply messages and
+ * the panels skip mounting their `<LiveBoard>` — saves the per-ply FEN
+ * parse and React render during long self-play / gym runs.
+ */
+export const PREVIEW_TRAINING_PREF_KEY = 'ui/preview-training';
+
 export function createOpponentStorage(): BlobStorage {
   return createIndexedDBAdapter({ prefix: STORAGE_PREFIX });
 }

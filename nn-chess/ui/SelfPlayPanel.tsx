@@ -46,6 +46,8 @@ import {
 } from './opponent-config.js';
 import { ENDGAME_PRESETS } from './endgame-presets.js';
 import { LICHESS_CATEGORIES } from './lichess-endgames.js';
+import type { LogAppender } from './TrainingLog.js';
+import type { RecordTrainingPass } from './TrainingPanel.js';
 
 /**
  * Hard cap on the "Until opponent wins a game" loop so a stuck run
@@ -104,12 +106,21 @@ export interface SelfPlayPanelProps {
   autoEnabled: boolean;
   onAutoEnabledChange: (enabled: boolean) => void;
   /**
+   * When true the worker emits per-ply messages and the panel renders
+   * a live board for the in-flight game. When false neither happens,
+   * saving the per-ply FEN parse + Board re-render during long runs.
+   */
+  previewEnabled: boolean;
+  onPreviewEnabledChange: (enabled: boolean) => void;
+  /**
    * MCTS sims/move to use for self-play. Sourced from the same slider
    * that controls the in-game opponent so a single knob covers both.
    * Defaults from `SELFPLAY_SEARCH.simulations` are no longer applied
    * here — the caller is the source of truth.
    */
   simulations: number;
+  onLog: LogAppender;
+  onTrainingPass: RecordTrainingPass;
 }
 
 export interface SelfPlayPanelHandle {
@@ -150,7 +161,19 @@ interface RunBatchOutcome {
 
 export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>(
   function SelfPlayPanel(
-    { opponent, imitator, storage, onOpponentRefresh, autoEnabled, onAutoEnabledChange, simulations },
+    {
+      opponent,
+      imitator,
+      storage,
+      onOpponentRefresh,
+      autoEnabled,
+      onAutoEnabledChange,
+      previewEnabled,
+      onPreviewEnabledChange,
+      simulations,
+      onLog,
+      onTrainingPass,
+    },
     ref,
   ) {
     const [mode, setMode] = useState<Mode>('fixed');
@@ -185,6 +208,11 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
     // re-binding the handle on every render.
     const runningRef = useRef(false);
     runningRef.current = running;
+    // Phase-transition tracking for the training log. Reset at the start
+    // of each batch so each batch logs its own phase boundaries.
+    const loggedPhasesRef = useRef<{ imitator: boolean; mcts: boolean; opponent: boolean }>(
+      { imitator: false, mcts: false, opponent: false },
+    );
     // Loop-level cancel flag: distinct from the worker's per-batch stop
     // because the loop must also short-circuit between batches.
     const loopStopRef = useRef(false);
@@ -213,6 +241,12 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
         setStepStatus(null);
         setLivePly(null);
         setBatch({ played: 0, wins: 0, losses: 0, draws: 0, examples: 0 });
+        loggedPhasesRef.current = { imitator: false, mcts: false, opponent: false };
+        onLog({
+          source: 'selfplay',
+          kind: 'info',
+          message: `Batch started — ${gamesToPlay} game(s), MCTS sims/move ${simulations}.`,
+        });
 
         let opponentWeights: Uint8Array;
         let imitatorWeights: Uint8Array;
@@ -261,8 +295,17 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               temperaturePlies: SELFPLAY_TEMPERATURE_PLIES,
               temperature: SELFPLAY_TEMPERATURE,
               startingFens,
+              previewEnabled,
             },
             (game) => {
+              if (!loggedPhasesRef.current.mcts) {
+                loggedPhasesRef.current.mcts = true;
+                onLog({
+                  source: 'selfplay',
+                  kind: 'phase',
+                  message: 'MCTS self-play games started (opponent vs. imitator).',
+                });
+              }
               collectedResults.push(game.opponentResult);
               setBatch(prev => {
                 const base = prev ?? { played: 0, wins: 0, losses: 0, draws: 0, examples: 0 };
@@ -276,6 +319,14 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               });
             },
             (step) => {
+              const phaseKey = step.phase === 'imitator' ? 'imitator' : 'opponent';
+              if (!loggedPhasesRef.current[phaseKey]) {
+                loggedPhasesRef.current[phaseKey] = true;
+                const label = step.phase === 'imitator'
+                  ? 'Imitator gradient descent started (pre-train).'
+                  : 'Opponent gradient descent started (post-train).';
+                onLog({ source: 'selfplay', kind: 'phase', message: label });
+              }
               setStepStatus({ phase: step.phase, stepIndex: step.stepIndex, totalLoss: step.totalLoss });
             },
             async (result) => {
@@ -290,6 +341,22 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
                   storage.put(IMITATOR_STORAGE_KEYS.REPLAY, result.imitatorReplay),
                 ]);
                 await onOpponentRefresh();
+                onTrainingPass('opponent', {
+                  gradientSteps: result.finalStep,
+                  batchSize: SELFPLAY_GRADIENT_BATCH,
+                });
+                onTrainingPass('imitator', {
+                  gradientSteps: result.imitatorFinalStep,
+                  batchSize: SELFPLAY_GRADIENT_BATCH,
+                });
+                onLog({
+                  source: 'selfplay',
+                  kind: 'save',
+                  message:
+                    `Saved opponent + imitator weights and replay buffers ` +
+                    `(${result.games} game(s): ${result.wins}W ${result.losses}L ${result.draws}D, ` +
+                    `${result.examplesAdded} new examples).`,
+                });
                 setStatusMsg(
                   `Self-play done — ${result.games} game(s): ` +
                   `opponent ${result.wins}W ${result.losses}L ${result.draws}D, ` +
@@ -297,9 +364,9 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
                   `opponent ${result.finalStep} / imitator ${result.imitatorFinalStep} grad step(s).`,
                 );
               } catch (err) {
-                setStatusMsg(
-                  `Self-play done but save failed: ${err instanceof Error ? err.message : String(err)}`,
-                );
+                const errMsg = err instanceof Error ? err.message : String(err);
+                onLog({ source: 'selfplay', kind: 'error', message: `Save failed: ${errMsg}` });
+                setStatusMsg(`Self-play done but save failed: ${errMsg}`);
               } finally {
                 setRunning(false);
                 runningRef.current = false;
@@ -308,6 +375,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               }
             },
             (msg) => {
+              onLog({ source: 'selfplay', kind: 'error', message: msg });
               setStatusMsg(`Self-play failed: ${msg}`);
               setRunning(false);
               runningRef.current = false;
@@ -335,7 +403,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
           );
         });
       },
-      [opponent, imitator, storage, onOpponentRefresh, curriculumId, simulations],
+      [opponent, imitator, storage, onOpponentRefresh, curriculumId, simulations, previewEnabled, onLog, onTrainingPass],
     );
 
     // "Until opponent wins a game" loop: fire batches back-to-back and
@@ -547,6 +615,15 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
             Auto-run after each game
           </label>
 
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9em' }}>
+            <input
+              type="checkbox"
+              checked={previewEnabled}
+              onChange={e => onPreviewEnabledChange(e.target.checked)}
+            />
+            Preview training (render live board — turn off to save compute)
+          </label>
+
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
             <button
               type="button"
@@ -566,7 +643,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
             </button>
           </div>
 
-          {livePly !== null && (
+          {previewEnabled && livePly !== null && (
             <LiveBoard livePly={livePly} />
           )}
 

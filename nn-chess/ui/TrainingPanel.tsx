@@ -16,12 +16,20 @@ import { TrainingClient } from './training-client.js';
 import type { DoneCallback, ProgressCallback } from './training-client.js';
 import { OPPONENT_STORAGE_KEYS } from '../core/opponent/index.js';
 import { IMITATOR_STORAGE_KEYS } from '../core/imitator/index.js';
+import type { LogAppender } from './TrainingLog.js';
+
+export type RecordTrainingPass = (
+  net: 'opponent' | 'imitator',
+  delta: { gradientSteps: number; batchSize: number },
+) => void;
 
 export interface TrainingPanelProps {
   opponent: Opponent;
   imitator: PlayerImitator | null;
   storage: BlobStorage;
   onOpponentRefresh: () => Promise<void>;
+  onLog: LogAppender;
+  onTrainingPass: RecordTrainingPass;
 }
 
 interface TrainProgress {
@@ -33,7 +41,7 @@ interface TrainProgress {
   totalLoss: number;
 }
 
-export function TrainingPanel({ opponent, imitator, storage, onOpponentRefresh }: TrainingPanelProps) {
+export function TrainingPanel({ opponent, imitator, storage, onOpponentRefresh, onLog, onTrainingPass }: TrainingPanelProps) {
   const [steps, setSteps] = useState(100);
   const [batchSize, setBatchSize] = useState(32);
   const [training, setTraining] = useState(false);
@@ -41,6 +49,9 @@ export function TrainingPanel({ opponent, imitator, storage, onOpponentRefresh }
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
   const clientRef = useRef<TrainingClient | null>(null);
+  // Track which phases we've already logged this run so phase-transition
+  // entries fire once each instead of once per step report.
+  const loggedPhasesRef = useRef<Set<'opponent' | 'imitator'>>(new Set());
 
   useEffect(() => {
     return () => {
@@ -61,6 +72,13 @@ export function TrainingPanel({ opponent, imitator, storage, onOpponentRefresh }
     setTraining(true);
     setProgress(null);
     setStatusMsg(null);
+    loggedPhasesRef.current = new Set();
+
+    onLog({
+      source: 'training',
+      kind: 'info',
+      message: `Train clicked — ${steps} step(s), batch ${batchSize}.`,
+    });
 
     // Serialize current weights and replay buffers for both nets.
     let weights: Uint8Array;
@@ -81,6 +99,15 @@ export function TrainingPanel({ opponent, imitator, storage, onOpponentRefresh }
     }
 
     const onProgress: ProgressCallback = (msg) => {
+      if (!loggedPhasesRef.current.has(msg.phase)) {
+        loggedPhasesRef.current.add(msg.phase);
+        const label = msg.phase === 'opponent' ? 'Opponent' : 'Imitator';
+        onLog({
+          source: 'training',
+          kind: 'phase',
+          message: `${label} gradient descent started.`,
+        });
+      }
       setProgress({
         phase: msg.phase,
         stepIndex: msg.stepIndex,
@@ -102,12 +129,23 @@ export function TrainingPanel({ opponent, imitator, storage, onOpponentRefresh }
           storage.put(IMITATOR_STORAGE_KEYS.REPLAY, result.imitatorReplay),
         ]);
         await onOpponentRefresh();
+        onTrainingPass('opponent', { gradientSteps: result.finalStep, batchSize });
+        onTrainingPass('imitator', { gradientSteps: result.imitatorFinalStep, batchSize });
+        onLog({
+          source: 'training',
+          kind: 'save',
+          message:
+            `Saved opponent + imitator weights and replay buffers ` +
+            `(opponent ${result.finalStep} step(s), imitator ${result.imitatorFinalStep} step(s)).`,
+        });
         setStatusMsg(
           `Training done — opponent ${result.finalStep} step(s), ` +
           `imitator ${result.imitatorFinalStep} step(s). Saved and reloaded.`,
         );
       } catch (err) {
-        setStatusMsg(`Training done but save failed: ${err instanceof Error ? err.message : String(err)}`);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        onLog({ source: 'training', kind: 'error', message: `Save failed: ${errMsg}` });
+        setStatusMsg(`Training done but save failed: ${errMsg}`);
       } finally {
         setTraining(false);
       }
@@ -115,6 +153,7 @@ export function TrainingPanel({ opponent, imitator, storage, onOpponentRefresh }
 
     const onError = (msg: string) => {
       setTraining(false);
+      onLog({ source: 'training', kind: 'error', message: msg });
       setStatusMsg(`Error: ${msg}`);
     };
 
@@ -137,7 +176,7 @@ export function TrainingPanel({ opponent, imitator, storage, onOpponentRefresh }
       onDone,
       onError,
     );
-  }, [training, opponent, imitator, storage, batchSize, steps, onOpponentRefresh]);
+  }, [training, opponent, imitator, storage, batchSize, steps, onOpponentRefresh, onLog, onTrainingPass]);
 
   const handleStop = useCallback(() => {
     clientRef.current?.stop();

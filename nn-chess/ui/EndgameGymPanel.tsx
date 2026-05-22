@@ -41,6 +41,8 @@ import {
   SELFPLAY_TEMPERATURE_PLIES,
 } from './opponent-config.js';
 import { GYM_CATEGORIES, GYM_CATEGORIES_BY_ID } from './endgame-gym-scenarios.js';
+import type { LogAppender } from './TrainingLog.js';
+import type { RecordTrainingPass } from './TrainingPanel.js';
 
 /**
  * Default cap on attempts per scenario. Set low so the gym moves
@@ -55,8 +57,18 @@ export interface EndgameGymPanelProps {
   storage: BlobStorage;
   /** Reload both nets from storage after the worker writes new weights. */
   onOpponentRefresh: () => Promise<void>;
+  /**
+   * When true the worker emits per-ply messages and the panel renders a
+   * live board for the in-flight game. When false the worker skips the
+   * per-ply postMessage and no board is rendered — saves compute on
+   * long gym runs.
+   */
+  previewEnabled: boolean;
+  onPreviewEnabledChange: (enabled: boolean) => void;
   /** MCTS sims/move — sourced from the in-game slider. */
   simulations: number;
+  onLog: LogAppender;
+  onTrainingPass: RecordTrainingPass;
 }
 
 interface LiveState {
@@ -90,7 +102,11 @@ export function EndgameGymPanel({
   imitator,
   storage,
   onOpponentRefresh,
+  previewEnabled,
+  onPreviewEnabledChange,
   simulations,
+  onLog,
+  onTrainingPass,
 }: EndgameGymPanelProps) {
   const [categoryId, setCategoryId] = useState<string>('presets');
   const [maxGamesPerScenario, setMaxGamesPerScenario] = useState(
@@ -105,6 +121,10 @@ export function EndgameGymPanel({
   const clientRef = useRef<SelfPlayClient | null>(null);
   const runningRef = useRef(false);
   runningRef.current = running;
+  // Phase-transition tracking for the training log. Reset per run.
+  const loggedPhasesRef = useRef<{ mcts: boolean; opponent: boolean }>(
+    { mcts: false, opponent: false },
+  );
 
   useEffect(() => {
     return () => {
@@ -129,6 +149,12 @@ export function EndgameGymPanel({
     setStatusMsg(null);
     setRecentOutcomes([]);
     setLive(null);
+    loggedPhasesRef.current = { mcts: false, opponent: false };
+    onLog({
+      source: 'gym',
+      kind: 'info',
+      message: `Gym started — ${scenarios.length} scenario(s), MCTS sims/move ${simulations}.`,
+    });
     setStats({
       totalScenarios: scenarios.length,
       scenariosDone: 0,
@@ -184,8 +210,17 @@ export function EndgameGymPanel({
         gradientBatchSize: SELFPLAY_GRADIENT_BATCH,
         temperaturePlies: SELFPLAY_TEMPERATURE_PLIES,
         temperature: SELFPLAY_TEMPERATURE,
+        previewEnabled,
       },
       (game) => {
+        if (!loggedPhasesRef.current.mcts) {
+          loggedPhasesRef.current.mcts = true;
+          onLog({
+            source: 'gym',
+            kind: 'phase',
+            message: 'MCTS gym games started (opponent on the winning side).',
+          });
+        }
         setStats(prev => prev === null ? prev : {
           ...prev,
           totalGames: prev.totalGames + 1,
@@ -212,11 +247,19 @@ export function EndgameGymPanel({
           return next.length > 8 ? next.slice(-8) : next;
         });
       },
-      (_step) => {
-        // Gradient-step progress isn't shown here — the gym's own
-        // scenario-level progress is the more useful signal. The
-        // protocol still emits step messages so the SelfPlayPanel-style
-        // UI gets parity if we ever fold the gym into that panel.
+      (step) => {
+        // Gradient-step progress isn't surfaced here as a meter — the
+        // scenario-level stats are the more useful signal — but we do
+        // log the first opponent-step so the user sees the boundary
+        // between MCTS scenarios and the post-batch gradient pass.
+        if (step.phase === 'opponent' && !loggedPhasesRef.current.opponent) {
+          loggedPhasesRef.current.opponent = true;
+          onLog({
+            source: 'gym',
+            kind: 'phase',
+            message: 'Opponent gradient descent started (post-gym).',
+          });
+        }
       },
       async (done) => {
         try {
@@ -227,8 +270,21 @@ export function EndgameGymPanel({
             storage.put(IMITATOR_STORAGE_KEYS.REPLAY, done.imitatorReplay),
           ]);
           await onOpponentRefresh();
+          // Gym only ever trains the opponent — `imitatorFinalStep` will
+          // be 0 here so the imitator counter doesn't move.
+          onTrainingPass('opponent', {
+            gradientSteps: done.finalStep,
+            batchSize: SELFPLAY_GRADIENT_BATCH,
+          });
           const conv = done.scenariosConverted ?? 0;
           const att = done.scenariosAttempted ?? 0;
+          onLog({
+            source: 'gym',
+            kind: 'save',
+            message:
+              `Saved opponent + imitator weights and replay buffers ` +
+              `(${conv}/${att} scenarios converted, ${done.examplesAdded} new examples).`,
+          });
           setStatusMsg(
             `Gym done — ${conv} / ${att} scenarios converted, ` +
             `opponent ${done.wins}W ${done.losses}L ${done.draws}D across ${done.games} game(s), ` +
@@ -236,7 +292,9 @@ export function EndgameGymPanel({
             `opponent ${done.finalStep} grad step(s).`,
           );
         } catch (err) {
-          setStatusMsg(`Gym done but save failed: ${err instanceof Error ? err.message : String(err)}`);
+          const errMsg = err instanceof Error ? err.message : String(err);
+          onLog({ source: 'gym', kind: 'error', message: `Save failed: ${errMsg}` });
+          setStatusMsg(`Gym done but save failed: ${errMsg}`);
         } finally {
           setRunning(false);
           runningRef.current = false;
@@ -244,6 +302,7 @@ export function EndgameGymPanel({
         }
       },
       (msg) => {
+        onLog({ source: 'gym', kind: 'error', message: msg });
         setStatusMsg(`Gym failed: ${msg}`);
         setRunning(false);
         runningRef.current = false;
@@ -268,7 +327,7 @@ export function EndgameGymPanel({
         }
       },
     );
-  }, [opponent, imitator, storage, onOpponentRefresh, simulations, category, maxGamesPerScenario]);
+  }, [opponent, imitator, storage, onOpponentRefresh, simulations, category, maxGamesPerScenario, previewEnabled, onLog, onTrainingPass]);
 
   const handleStop = useCallback(() => {
     clientRef.current?.stop();
@@ -335,6 +394,15 @@ export function EndgameGymPanel({
           {category.description}
         </div>
 
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9em' }}>
+          <input
+            type="checkbox"
+            checked={previewEnabled}
+            onChange={e => onPreviewEnabledChange(e.target.checked)}
+          />
+          Preview training (render live board — turn off to save compute)
+        </label>
+
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
           <button
             type="button"
@@ -364,7 +432,7 @@ export function EndgameGymPanel({
           </div>
         )}
 
-        {live !== null && <LiveBoard live={live} />}
+        {previewEnabled && live !== null && <LiveBoard live={live} />}
 
         {recentOutcomes.length > 0 && (
           <div style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>
