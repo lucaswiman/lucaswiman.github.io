@@ -20,6 +20,7 @@
  */
 
 import type { SelfPlayRequest, SelfPlayResponse } from './selfplay-protocol.js';
+import { formatWorkerErrorEvent } from './worker-error.js';
 
 export type SelfPlayStartParams = Extract<SelfPlayRequest, { kind: 'start' }>;
 
@@ -78,7 +79,12 @@ export class SelfPlayClient {
     };
 
     this.worker.onerror = (event) => {
-      onError(`Worker error: ${event.message}`);
+      onError(`Worker error: ${formatWorkerErrorEvent(event)}`);
+      this._cleanup();
+    };
+
+    this.worker.onmessageerror = (event) => {
+      onError(`Worker messageerror: failed to deserialize message ${String(event.data ?? '')}`);
       this._cleanup();
     };
 
