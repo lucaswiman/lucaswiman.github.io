@@ -119,6 +119,8 @@ export interface SelfPlayPanelProps {
    * here — the caller is the source of truth.
    */
   simulations: number;
+  /** PUCT exploration constant — sourced from the in-game slider. */
+  cPuct: number;
   onLog: LogAppender;
   onTrainingPass: RecordTrainingPass;
 }
@@ -171,6 +173,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
       previewEnabled,
       onPreviewEnabledChange,
       simulations,
+      cPuct,
       onLog,
       onTrainingPass,
     },
@@ -287,7 +290,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               replay,
               imitatorReplay,
               replayCapacity: REPLAY_CAPACITY,
-              search: { ...SELFPLAY_SEARCH, simulations },
+              search: { ...SELFPLAY_SEARCH, simulations, cPuct },
               count: gamesToPlay,
               maxPlies: SELFPLAY_MAX_PLIES,
               gradientSteps: SELFPLAY_GRADIENT_STEPS,

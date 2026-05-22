@@ -139,6 +139,8 @@ export interface Opponent {
 
   /** Update the MCTS simulation budget for future selectMove calls. */
   setSimulations(n: number): void;
+  /** Update the PUCT exploration constant for future selectMove calls. */
+  setCPuct(c: number): void;
 
   /** Read-only handles for the UI / interpretability viewer. */
   readonly net: ChessNet;
@@ -416,12 +418,17 @@ export function createOpponent(opts: CreateOpponentOptions): Opponent {
     config.simulations = n;
   };
 
+  const setCPuct = (c: number): void => {
+    config.cPuct = c;
+  };
+
   return {
     selectMove,
     recordGameResult,
     saveTo,
     trainStep,
     setSimulations,
+    setCPuct,
     get net() { return net; },
     get replayBuffer() { return replayBuffer; },
   };

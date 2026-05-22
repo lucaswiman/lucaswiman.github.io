@@ -105,6 +105,7 @@ export default function Game() {
   // this once it lands.
   const [previewTraining, setPreviewTraining] = useState(true);
   const [simulations, setSimulations] = useState(OPPONENT_CONFIG.simulations);
+  const [cPuct, setCPuct] = useState(OPPONENT_CONFIG.cPuct);
   // Shared log fed by every training-side panel. Lets the user see
   // gradient-descent vs MCTS phase transitions and storage saves
   // without staring at the console.
@@ -301,6 +302,10 @@ export default function Game() {
   useEffect(() => {
     if (opponent) opponent.setSimulations(simulations);
   }, [opponent, simulations]);
+
+  useEffect(() => {
+    if (opponent) opponent.setCPuct(cPuct);
+  }, [opponent, cPuct]);
 
   // Restore the last in-progress (or just-finished) game from storage.
   // Runs once on mount. If the saved session is already terminal we
@@ -770,7 +775,7 @@ export default function Game() {
         </label>
       </div>
 
-      <div style={{ marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center' }}>
+      <div style={{ marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
         <strong>Strength:</strong>
         <input
           type="range"
@@ -782,6 +787,21 @@ export default function Game() {
           style={{ width: '120px' }}
         />
         <span style={{ fontSize: '0.9em', color: '#555' }}>{simulations} sims/move</span>
+        <span style={{ fontSize: '0.9em', color: '#888' }}>|</span>
+        <label style={{ fontSize: '0.9em', color: '#555', display: 'flex', gap: '8px', alignItems: 'center' }}
+          title="PUCT exploration constant. Lower = search goes deeper on the best line; higher = broader, more exploratory tree.">
+          explore (cPuct):
+          <input
+            type="range"
+            min={0.5}
+            max={4.0}
+            step={0.25}
+            value={cPuct}
+            onChange={e => setCPuct(Number(e.target.value))}
+            style={{ width: '100px' }}
+          />
+          <span style={{ fontFamily: 'monospace' }}>{cPuct.toFixed(2)}</span>
+        </label>
       </div>
 
       <div style={{ marginBottom: '8px', minHeight: '24px' }}>
@@ -872,6 +892,7 @@ export default function Game() {
         previewEnabled={previewTraining}
         onPreviewEnabledChange={handlePreviewTrainingChange}
         simulations={simulations}
+        cPuct={cPuct}
         onLog={trainingLog.append}
         onTrainingPass={recordTrainingPass}
       />
@@ -884,6 +905,7 @@ export default function Game() {
         previewEnabled={previewTraining}
         onPreviewEnabledChange={handlePreviewTrainingChange}
         simulations={simulations}
+        cPuct={cPuct}
         onLog={trainingLog.append}
         onTrainingPass={recordTrainingPass}
       />

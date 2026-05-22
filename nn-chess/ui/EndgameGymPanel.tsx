@@ -67,6 +67,8 @@ export interface EndgameGymPanelProps {
   onPreviewEnabledChange: (enabled: boolean) => void;
   /** MCTS sims/move — sourced from the in-game slider. */
   simulations: number;
+  /** PUCT exploration constant — sourced from the in-game slider. */
+  cPuct: number;
   onLog: LogAppender;
   onTrainingPass: RecordTrainingPass;
 }
@@ -105,6 +107,7 @@ export function EndgameGymPanel({
   previewEnabled,
   onPreviewEnabledChange,
   simulations,
+  cPuct,
   onLog,
   onTrainingPass,
 }: EndgameGymPanelProps) {
@@ -202,7 +205,7 @@ export function EndgameGymPanel({
         replay,
         imitatorReplay,
         replayCapacity: REPLAY_CAPACITY,
-        search: { ...SELFPLAY_SEARCH, simulations },
+        search: { ...SELFPLAY_SEARCH, simulations, cPuct },
         scenarios: gymScenarios,
         maxGamesPerScenario,
         maxPlies: SELFPLAY_MAX_PLIES,
