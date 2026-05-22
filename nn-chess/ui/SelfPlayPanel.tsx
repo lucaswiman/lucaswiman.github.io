@@ -46,6 +46,7 @@ import {
 } from './opponent-config.js';
 import { ENDGAME_PRESETS } from './endgame-presets.js';
 import { LICHESS_CATEGORIES } from './lichess-endgames.js';
+import type { LogAppender } from './TrainingLog.js';
 
 /**
  * Hard cap on the "Until opponent wins a game" loop so a stuck run
@@ -117,6 +118,7 @@ export interface SelfPlayPanelProps {
    * here — the caller is the source of truth.
    */
   simulations: number;
+  onLog: LogAppender;
 }
 
 export interface SelfPlayPanelHandle {
@@ -167,6 +169,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
       previewEnabled,
       onPreviewEnabledChange,
       simulations,
+      onLog,
     },
     ref,
   ) {
@@ -202,6 +205,11 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
     // re-binding the handle on every render.
     const runningRef = useRef(false);
     runningRef.current = running;
+    // Phase-transition tracking for the training log. Reset at the start
+    // of each batch so each batch logs its own phase boundaries.
+    const loggedPhasesRef = useRef<{ imitator: boolean; mcts: boolean; opponent: boolean }>(
+      { imitator: false, mcts: false, opponent: false },
+    );
     // Loop-level cancel flag: distinct from the worker's per-batch stop
     // because the loop must also short-circuit between batches.
     const loopStopRef = useRef(false);
@@ -230,6 +238,12 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
         setStepStatus(null);
         setLivePly(null);
         setBatch({ played: 0, wins: 0, losses: 0, draws: 0, examples: 0 });
+        loggedPhasesRef.current = { imitator: false, mcts: false, opponent: false };
+        onLog({
+          source: 'selfplay',
+          kind: 'info',
+          message: `Batch started — ${gamesToPlay} game(s), MCTS sims/move ${simulations}.`,
+        });
 
         let opponentWeights: Uint8Array;
         let imitatorWeights: Uint8Array;
@@ -281,6 +295,14 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               previewEnabled,
             },
             (game) => {
+              if (!loggedPhasesRef.current.mcts) {
+                loggedPhasesRef.current.mcts = true;
+                onLog({
+                  source: 'selfplay',
+                  kind: 'phase',
+                  message: 'MCTS self-play games started (opponent vs. imitator).',
+                });
+              }
               collectedResults.push(game.opponentResult);
               setBatch(prev => {
                 const base = prev ?? { played: 0, wins: 0, losses: 0, draws: 0, examples: 0 };
@@ -294,6 +316,14 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               });
             },
             (step) => {
+              const phaseKey = step.phase === 'imitator' ? 'imitator' : 'opponent';
+              if (!loggedPhasesRef.current[phaseKey]) {
+                loggedPhasesRef.current[phaseKey] = true;
+                const label = step.phase === 'imitator'
+                  ? 'Imitator gradient descent started (pre-train).'
+                  : 'Opponent gradient descent started (post-train).';
+                onLog({ source: 'selfplay', kind: 'phase', message: label });
+              }
               setStepStatus({ phase: step.phase, stepIndex: step.stepIndex, totalLoss: step.totalLoss });
             },
             async (result) => {
@@ -308,6 +338,14 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
                   storage.put(IMITATOR_STORAGE_KEYS.REPLAY, result.imitatorReplay),
                 ]);
                 await onOpponentRefresh();
+                onLog({
+                  source: 'selfplay',
+                  kind: 'save',
+                  message:
+                    `Saved opponent + imitator weights and replay buffers ` +
+                    `(${result.games} game(s): ${result.wins}W ${result.losses}L ${result.draws}D, ` +
+                    `${result.examplesAdded} new examples).`,
+                });
                 setStatusMsg(
                   `Self-play done — ${result.games} game(s): ` +
                   `opponent ${result.wins}W ${result.losses}L ${result.draws}D, ` +
@@ -315,9 +353,9 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
                   `opponent ${result.finalStep} / imitator ${result.imitatorFinalStep} grad step(s).`,
                 );
               } catch (err) {
-                setStatusMsg(
-                  `Self-play done but save failed: ${err instanceof Error ? err.message : String(err)}`,
-                );
+                const errMsg = err instanceof Error ? err.message : String(err);
+                onLog({ source: 'selfplay', kind: 'error', message: `Save failed: ${errMsg}` });
+                setStatusMsg(`Self-play done but save failed: ${errMsg}`);
               } finally {
                 setRunning(false);
                 runningRef.current = false;
@@ -326,6 +364,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               }
             },
             (msg) => {
+              onLog({ source: 'selfplay', kind: 'error', message: msg });
               setStatusMsg(`Self-play failed: ${msg}`);
               setRunning(false);
               runningRef.current = false;
@@ -353,7 +392,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
           );
         });
       },
-      [opponent, imitator, storage, onOpponentRefresh, curriculumId, simulations, previewEnabled],
+      [opponent, imitator, storage, onOpponentRefresh, curriculumId, simulations, previewEnabled, onLog],
     );
 
     // "Until opponent wins a game" loop: fire batches back-to-back and

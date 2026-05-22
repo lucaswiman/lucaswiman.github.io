@@ -5,6 +5,7 @@ import { InspectorPanel } from './InspectorPanel.js';
 import { SelfPlayPanel } from './SelfPlayPanel.js';
 import type { SelfPlayPanelHandle } from './SelfPlayPanel.js';
 import { EndgameGymPanel } from './EndgameGymPanel.js';
+import { TrainingLog, useTrainingLog } from './TrainingLog.js';
 import {
   initialState,
   applyMove,
@@ -93,6 +94,10 @@ export default function Game() {
   // this once it lands.
   const [previewTraining, setPreviewTraining] = useState(true);
   const [simulations, setSimulations] = useState(OPPONENT_CONFIG.simulations);
+  // Shared log fed by every training-side panel. Lets the user see
+  // gradient-descent vs MCTS phase transitions and storage saves
+  // without staring at the console.
+  const trainingLog = useTrainingLog();
   // Gates the "persist session on change" effect: we only start writing
   // after the load attempt finishes, so the initial in-memory state
   // can't overwrite a saved session before we've had a chance to read it.
@@ -765,6 +770,7 @@ export default function Game() {
             imitator={imitator}
             storage={storage}
             onOpponentRefresh={handleOpponentRefresh}
+            onLog={trainingLog.append}
             key={opponentVersion}
           />
         </div>
@@ -781,6 +787,7 @@ export default function Game() {
         previewEnabled={previewTraining}
         onPreviewEnabledChange={handlePreviewTrainingChange}
         simulations={simulations}
+        onLog={trainingLog.append}
       />
 
       <EndgameGymPanel
@@ -791,7 +798,10 @@ export default function Game() {
         previewEnabled={previewTraining}
         onPreviewEnabledChange={handlePreviewTrainingChange}
         simulations={simulations}
+        onLog={trainingLog.append}
       />
+
+      <TrainingLog entries={trainingLog.entries} onClear={trainingLog.clear} />
 
       <InspectorPanel
         opponent={opponent}
