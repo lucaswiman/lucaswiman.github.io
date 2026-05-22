@@ -106,6 +106,7 @@ export default function Game() {
   const [previewTraining, setPreviewTraining] = useState(true);
   const [simulations, setSimulations] = useState(OPPONENT_CONFIG.simulations);
   const [cPuct, setCPuct] = useState(OPPONENT_CONFIG.cPuct);
+  const [cPuctTipOpen, setCPuctTipOpen] = useState(false);
   // Shared log fed by every training-side panel. Lets the user see
   // gradient-descent vs MCTS phase transitions and storage saves
   // without staring at the console.
@@ -788,9 +789,43 @@ export default function Game() {
         />
         <span style={{ fontSize: '0.9em', color: '#555' }}>{simulations} sims/move</span>
         <span style={{ fontSize: '0.9em', color: '#888' }}>|</span>
-        <label style={{ fontSize: '0.9em', color: '#555', display: 'flex', gap: '8px', alignItems: 'center' }}
-          title="PUCT exploration constant. Lower = search goes deeper on the best line; higher = broader, more exploratory tree.">
-          explore (cPuct):
+        <label style={{ fontSize: '0.9em', color: '#555', display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+            explore (cPuct):
+            <span
+              role="button"
+              aria-label="Help for cPuct"
+              style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                width: '15px', height: '15px', borderRadius: '50%',
+                background: '#bbb', color: '#fff', fontSize: '0.7em', fontWeight: 'bold',
+                cursor: 'pointer', userSelect: 'none', position: 'relative', flexShrink: 0,
+              }}
+              onMouseEnter={() => setCPuctTipOpen(true)}
+              onMouseLeave={() => setCPuctTipOpen(false)}
+              onClick={() => setCPuctTipOpen(o => !o)}
+            >
+              ?
+              {cPuctTipOpen && (
+                <span style={{
+                  position: 'absolute', bottom: '120%', left: '50%',
+                  transform: 'translateX(-50%)',
+                  background: '#333', color: '#fff', fontSize: '0.95em',
+                  fontWeight: 'normal', lineHeight: '1.4',
+                  padding: '7px 10px', borderRadius: '5px',
+                  width: '240px', whiteSpace: 'normal',
+                  pointerEvents: 'none', zIndex: 10,
+                  boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+                }}>
+                  PUCT exploration constant (AlphaZero default: 1.5).
+                  <br /><br />
+                  <strong>Lower</strong> → simulations concentrate on the highest-value line, searching deeper but narrower.
+                  <br /><br />
+                  <strong>Higher</strong> → simulations spread across more candidate moves, shallower but broader.
+                </span>
+              )}
+            </span>
+          </span>
           <input
             type="range"
             min={0.5}
