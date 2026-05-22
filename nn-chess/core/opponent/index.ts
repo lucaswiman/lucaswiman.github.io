@@ -116,6 +116,7 @@ export interface Opponent {
     rootValue: number;
     visitCounts: Map<Move, number>;
     priorPolicy: Map<Move, number>;
+    edgeValues: Map<Move, number>;
   }>;
 
   /**
@@ -368,6 +369,7 @@ export function createOpponent(opts: CreateOpponentOptions): Opponent {
     rootValue: number;
     visitCounts: Map<Move, number>;
     priorPolicy: Map<Move, number>;
+    edgeValues: Map<Move, number>;
   }> => {
     const policy = policyFromNet(net);
 
@@ -380,12 +382,12 @@ export function createOpponent(opts: CreateOpponentOptions): Opponent {
     };
 
     const result = await search(state, policy, searchConfig);
-    const { rootValue, visitCounts, priorPolicy } = result;
+    const { rootValue, visitCounts, priorPolicy, edgeValues } = result;
 
     const temperature = config.temperature ?? 0;
     const move = pickMove(visitCounts, priorPolicy, temperature, config.rng);
 
-    return { move, rootValue, visitCounts, priorPolicy };
+    return { move, rootValue, visitCounts, priorPolicy, edgeValues };
   };
 
   const recordGameResult = (

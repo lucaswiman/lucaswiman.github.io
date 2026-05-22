@@ -377,10 +377,10 @@ export default function Game() {
 
     const capturedState = session.state;
 
-    opponent.selectMove(capturedState).then(({ move, rootValue, visitCounts, priorPolicy }) => {
+    opponent.selectMove(capturedState).then(({ move, rootValue, visitCounts, priorPolicy, edgeValues }) => {
       opponentMoveInFlight.current = false;
 
-      setLastSearch({ bestMove: move, rootValue, visitCounts, priorPolicy });
+      setLastSearch({ bestMove: move, rootValue, visitCounts, priorPolicy, edgeValues });
 
       const record: GameMoveRecord = {
         features: encodeState(capturedState),
