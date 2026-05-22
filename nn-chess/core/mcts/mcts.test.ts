@@ -121,6 +121,66 @@ describe('mcts: mate-in-1, black to move', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Mate-in-1 is mandatory
+// ---------------------------------------------------------------------------
+// The selectEdge override + bestMove override are supposed to make this
+// hold regardless of prior, sims budget, or rng: if a mate-in-1 exists at
+// the root, it must be the returned best move and it must show up in
+// `mateInOneMoves`. One simulation is enough.
+
+describe('mcts: mate-in-1 is mandatory', () => {
+  it('returns the mate move with a single simulation', async () => {
+    const state = fromFen('6k1/8/5K2/8/8/8/8/6Q1 w - - 0 1');
+    const result = await search(state, uniformPolicy, baseConfig({ simulations: 1 }));
+    expect(result.bestMove).toBe('g1g7');
+    expect(result.mateInOneMoves).toContain('g1g7');
+  });
+
+  it('lists every mate-in-1 move when there are multiple', async () => {
+    // Black to move, both h8h1 and h8b2 mate.
+    const state = fromFen('7q/8/8/8/8/1k6/8/K7 b - - 0 1');
+    const result = await search(state, uniformPolicy, baseConfig({ simulations: 1 }));
+    expect(result.mateInOneMoves.sort()).toEqual(['h8b2', 'h8h1']);
+  });
+
+  it('returns no mate-in-1 moves when none exist at the root', async () => {
+    const result = await search(
+      fromFen('4k3/8/4K3/8/8/8/8/3Q4 w - - 0 1'),
+      uniformPolicy,
+      baseConfig({ simulations: 4 }),
+    );
+    // Mate-in-2 position; no edge from the root is itself a mate.
+    expect(result.mateInOneMoves).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Forced lookahead finds mate-in-2 with depth-2 leaf search
+// ---------------------------------------------------------------------------
+// Mate-in-2: 1. Qd7+ Kf8 2. Qf7#. With mateSearchDepth=2, the first time
+// MCTS expands the post-Qd7+ leaf it discovers the forced loss for Black
+// and backs +1 up through the d1d7 edge. Combined with the forced-reply
+// shortcut (Kf8 is Black's only legal move), this means even a tiny sim
+// budget should find the mate.
+
+describe('mcts: forced lookahead finds mate-in-2', () => {
+  it('locks onto a winning line with depth-2 leaf search and few sims', async () => {
+    // The MctsExplainer demo position. With Kf6/Kxd7 covered by the
+    // white king, BOTH d1d7 and (it turns out) e6f6 are winning mate-in-
+    // 2 lines from this position — the test asserts the search finds
+    // SOME forced win, not a specific move.
+    const state = fromFen('4k3/8/4K3/8/8/8/8/3Q4 w - - 0 1');
+    const result = await search(
+      state,
+      uniformPolicy,
+      baseConfig({ simulations: 16, mateSearchDepth: 2 }),
+    );
+    // rootValue close to +1 means the chosen edge backed a forced win.
+    expect(result.rootValue).toBeGreaterThan(0.99);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Stalemate avoidance
 // ---------------------------------------------------------------------------
 // Same position as the white mate-in-1 above (reused): g1g7 mates, g1g8

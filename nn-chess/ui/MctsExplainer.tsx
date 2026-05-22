@@ -50,6 +50,14 @@ import {
 //   2. Qf7#   king on f8 has no escape, queen defended by Ke6.
 const MATE_IN_2_FEN = '4k3/8/4K3/8/8/8/8/3Q4 w - - 0 1';
 
+// The mate-in-2 mainline, indexed by step. We pass each ply's "correct"
+// move down to the candidate table so it's always rendered even when
+// cold-start MCTS doesn't visit it enough to land in the top-N by visit
+// count. The check that the move is actually legal in the current state
+// happens in the table, so deviating from the line just hides the
+// downstream hints.
+const MATE_LINE: readonly Move[] = ['d1d7', 'e8f8', 'd7f7'];
+
 // Cap on user-clicked moves. The mate is 3 plies long, so 4 gives one
 // ply of slack for offline explorations the user might click into.
 // Counted as moves (clicks), not positions: with MAX_MOVES = 4 we show
@@ -141,8 +149,10 @@ export default function MctsExplainer() {
 
   // Drive the MCTS search for whichever step is currently unanalysed.
   // Each step appended by `chooseMove` starts with searchResult = null;
-  // this effect notices and fills it in. Guards against stale completions
-  // by re-checking the step's identity before merging the result.
+  // this effect notices and fills it in. Identity check on the captured
+  // step object (not its state) so a slider-driven re-run — which keeps
+  // the same state but replaces the step object — invalidates any
+  // in-flight stale result.
   useEffect(() => {
     if (opponent === null || imitator === null) return;
     if (steps.length === 0) return;
@@ -153,15 +163,20 @@ export default function MctsExplainer() {
 
     let cancelled = false;
     const net = netForKind(last.net, opponent, imitator);
-    search(last.state, policyFromNet(net), { simulations, cPuct })
+    // Depth-2 mate lookahead so the demo deterministically locks in the
+    // mate-in-2 as soon as MCTS visits the first move of the mainline.
+    // The default (depth-1) is fine for real play; we want the bigger
+    // window here for pedagogy.
+    search(last.state, policyFromNet(net), { simulations, cPuct, mateSearchDepth: 2 })
       .then(result => {
         if (cancelled) return;
         setSteps(prev => {
           if (prev.length === 0) return prev;
           const lastNow = prev[prev.length - 1];
-          // Bail if the step we analysed is no longer the trailing one
-          // (user clicked something else mid-flight).
-          if (lastNow.state !== last.state) return prev;
+          // Bail if the trailing step has been replaced (slider change
+          // or user navigation); the freshly-invalidated step will get
+          // its own search via this same effect.
+          if (lastNow !== last) return prev;
           const updated = [...prev];
           updated[updated.length - 1] = { ...lastNow, searchResult: result };
           return updated;
@@ -174,6 +189,25 @@ export default function MctsExplainer() {
 
     return () => { cancelled = true; };
   }, [steps, opponent, imitator, simulations, cPuct]);
+
+  // When the user moves a slider, replace the trailing step with a
+  // fresh object (same state, but searchResult cleared). The effect
+  // above sees the null result and re-runs MCTS at the new sims/cPuct.
+  // Replacing the object — rather than mutating it — is what trips the
+  // in-flight identity check so a stale 256-sim completion can't
+  // overwrite the new 1024-sim result.
+  useEffect(() => {
+    setSteps(prev => {
+      if (prev.length === 0) return prev;
+      const idx = prev.length - 1;
+      const last = prev[idx];
+      if (last.searchResult === null) return prev;  // nothing to invalidate
+      if (last.finalOutcome !== null) return prev;  // terminal: no search runs here
+      const updated = [...prev];
+      updated[idx] = { ...last, searchResult: null };
+      return updated;
+    });
+  }, [simulations, cPuct]);
 
   const chooseMove = useCallback((stepIndex: number, move: Move) => {
     setSteps(prev => {
@@ -304,6 +338,7 @@ export default function MctsExplainer() {
           onChoose={chooseMove}
           simulations={simulations}
           cPuct={cPuct}
+          featuredMove={MATE_LINE[idx]}
         />
       ))}
 
@@ -330,9 +365,13 @@ interface StepViewProps {
   onChoose: (stepIndex: number, move: Move) => void;
   simulations: number;
   cPuct: number;
+  // The mate-mainline move expected at this ply, when one is defined.
+  // CandidateTable surfaces it as a pinned row even when it's outside
+  // the visit-count top-N, so the user can always read its Q/N/U.
+  featuredMove?: Move;
 }
 
-function StepView({ step, stepIndex, isLast, onChoose, simulations, cPuct }: StepViewProps) {
+function StepView({ step, stepIndex, isLast, onChoose, simulations, cPuct, featuredMove }: StepViewProps) {
   const ply = stepIndex + 1;
   const side = sideToMove(step.state);
   const sideLabel = side === 'w' ? 'White' : 'Black';
@@ -396,6 +435,7 @@ function StepView({ step, stepIndex, isLast, onChoose, simulations, cPuct }: Ste
               onChoose={move => onChoose(stepIndex, move)}
               simulations={simulations}
               cPuct={cPuct}
+              featuredMove={featuredMove}
             />
           )}
         </div>
@@ -412,27 +452,40 @@ interface CandidateTableProps {
   onChoose: (move: Move) => void;
   simulations: number;
   cPuct: number;
+  featuredMove?: Move;
 }
 
-function CandidateTable({ search, chosen, onChoose, simulations, cPuct }: CandidateTableProps) {
+function CandidateTable({ search, chosen, onChoose, simulations, cPuct, featuredMove }: CandidateTableProps) {
   const totalVisits = useMemo(
     () => Array.from(search.visitCounts.values()).reduce((a, b) => a + b, 0),
     [search.visitCounts],
   );
   const sqrtN = Math.sqrt(totalVisits);
 
-  const rows = useMemo(() => {
+  // Top-5 by visit count, plus the mate-mainline move appended if it
+  // exists as a legal candidate in this position but wasn't already in
+  // the top 5. The pinned row keeps the demo readable when the cold-
+  // start prior buries d1d7 / d7f7 outside the visit-count leaders.
+  const { rows, featuredPinned } = useMemo(() => {
     const items = Array.from(search.visitCounts.entries()).map(([move, visits]) => {
       const prior = search.priorPolicy.get(move) ?? 0;
       const q = search.edgeValues.get(move) ?? 0;
-      // PUCT score the *next* simulation would compute, useful pedagogy
-      // for the "explore-vs-exploit" terms.
       const u = cPuct * prior * sqrtN / (1 + visits);
       return { move, visits, prior, q, u, puct: q + u };
     });
     items.sort((a, b) => b.visits - a.visits);
-    return items.slice(0, 5);
-  }, [search, cPuct, sqrtN]);
+    const top = items.slice(0, 5);
+    let pinned = false;
+    if (featuredMove !== undefined && search.visitCounts.has(featuredMove)
+        && !top.some(r => r.move === featuredMove)) {
+      const featured = items.find(r => r.move === featuredMove);
+      if (featured !== undefined) {
+        top.push(featured);
+        pinned = true;
+      }
+    }
+    return { rows: top, featuredPinned: pinned };
+  }, [search, cPuct, sqrtN, featuredMove]);
 
   return (
     <>
@@ -462,6 +515,7 @@ function CandidateTable({ search, chosen, onChoose, simulations, cPuct }: Candid
         <tbody>
           {rows.map(row => {
             const isChosen = chosen === row.move;
+            const isFeatured = featuredMove === row.move;
             return (
               <tr
                 key={row.move}
@@ -475,6 +529,9 @@ function CandidateTable({ search, chosen, onChoose, simulations, cPuct }: Candid
                   {row.move}
                   {isChosen && (
                     <span style={{ color: '#1e5fb4', marginLeft: '6px', fontWeight: 'bold' }}>← played</span>
+                  )}
+                  {isFeatured && !isChosen && (
+                    <span style={{ color: '#7a5e1e', marginLeft: '6px', fontStyle: 'italic' }}>(mainline)</span>
                   )}
                 </td>
                 <td style={{ padding: '4px 8px', textAlign: 'right' }}>{row.visits}</td>
@@ -501,7 +558,8 @@ function CandidateTable({ search, chosen, onChoose, simulations, cPuct }: Candid
       </table>
       {search.visitCounts.size > rows.length && (
         <div style={{ marginTop: '6px', fontSize: '0.78em', color: '#888' }}>
-          + {search.visitCounts.size - rows.length} other move{search.visitCounts.size - rows.length === 1 ? '' : 's'} not shown.
+          + {search.visitCounts.size - rows.length} other move{search.visitCounts.size - rows.length === 1 ? '' : 's'} not shown
+          {featuredPinned ? ' (mainline pinned below visit-count top 5).' : '.'}
         </div>
       )}
     </>

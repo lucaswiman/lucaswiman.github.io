@@ -28,7 +28,7 @@ import {
 import type { GameState, Move, Outcome } from '../core/rules/index.js';
 import { encodeState } from '../core/encoding/index.js';
 import type { Opponent, GameMoveRecord } from '../core/opponent/index.js';
-import { legalMoveIndicesFor, OPPONENT_STORAGE_KEYS } from '../core/opponent/index.js';
+import { legalMoveIndicesFor, mateInOneIndicesFor, OPPONENT_STORAGE_KEYS } from '../core/opponent/index.js';
 import type { PlayerImitator } from '../core/imitator/index.js';
 import { IMITATOR_STORAGE_KEYS } from '../core/imitator/index.js';
 import type { SearchResult } from '../core/mcts/index.js';
@@ -380,13 +380,14 @@ export default function Game() {
     opponent.selectMove(capturedState).then(({ move, rootValue, visitCounts, priorPolicy, edgeValues }) => {
       opponentMoveInFlight.current = false;
 
-      setLastSearch({ bestMove: move, rootValue, visitCounts, priorPolicy, edgeValues });
+      setLastSearch({ bestMove: move, rootValue, visitCounts, priorPolicy, edgeValues, mateInOneMoves: [] });
 
       const record: GameMoveRecord = {
         features: encodeState(capturedState),
         move,
         sideToMove: sideToMove(capturedState),
         legalMoveIndices: legalMoveIndicesFor(capturedState),
+        mateMoveIndices: mateInOneIndicesFor(capturedState),
       };
 
       const nextState = applyMove(capturedState, move);
@@ -463,6 +464,7 @@ export default function Game() {
         move,
         sideToMove: sideToMove(prev.state),
         legalMoveIndices: legalMoveIndicesFor(prev.state),
+        mateMoveIndices: mateInOneIndicesFor(prev.state),
       };
       const o = outcome(nextState);
       const gameOver = o !== 'ongoing';

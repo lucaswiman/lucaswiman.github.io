@@ -20,7 +20,7 @@
 
 import { encodeState } from '../encoding/index.js';
 import type { GameState, Move, Outcome } from '../rules/index.js';
-import { legalMoves, isTerminal } from '../rules/index.js';
+import { legalMoves, isTerminal, applyMove, terminalValueForMover } from '../rules/index.js';
 import {
   search,
   type Policy,
@@ -72,6 +72,53 @@ export interface GameMoveRecord {
    * index and the slot is "legal" if any one of them is.
    */
   legalMoveIndices: number[];
+  /**
+   * Sorted, de-duplicated set of policy indices for the legal moves at
+   * this position that deliver immediate checkmate. Empty when no
+   * mate-in-1 was available.
+   *
+   * When this is non-empty, the build-examples functions ignore the
+   * actually-played move and emit a corrective policy target that puts
+   * positive weight on these mate indices and NEGATIVE weight on every
+   * other legal index. Two things follow:
+   *   - Every available checkmate becomes a positive training example
+   *     for the mate move, regardless of who was on move or which move
+   *     they actually chose.
+   *   - Non-mate moves played from a position where mate was on the
+   *     board get a *negative* learning signal, so the policy is
+   *     actively pushed off them instead of being trained to imitate
+   *     the miss.
+   */
+  mateMoveIndices: number[];
+}
+
+/**
+ * Find every legal move at `state` that delivers immediate checkmate.
+ * Returns UCI strings, lexicographically sorted for determinism.
+ *
+ * "Delivers checkmate" = applying the move yields a terminal position
+ * where the side that just moved (us) won. This is the same rules-only
+ * check MCTS uses internally to short-circuit search.
+ */
+export function mateInOneMovesFor(state: GameState): Move[] {
+  if (isTerminal(state)) return [];
+  const out: Move[] = [];
+  for (const m of legalMoves(state)) {
+    const child = applyMove(state, m);
+    if (isTerminal(child) && terminalValueForMover(child) === 1) out.push(m);
+  }
+  out.sort();
+  return out;
+}
+
+/**
+ * Policy indices for every mate-in-1 move at `state`. Companion to
+ * `legalMoveIndicesFor`; lives here for the same reason.
+ */
+export function mateInOneIndicesFor(state: GameState): number[] {
+  const set = new Set<number>();
+  for (const m of mateInOneMovesFor(state)) set.add(policyIndexFromUci(m));
+  return Array.from(set).sort((a, b) => a - b);
 }
 
 /**
@@ -281,18 +328,31 @@ export function buildTrainingExamples(
       valueTarget = record.sideToMove === 'b' ? 1 : -1;
     }
 
-    // Policy target: one-hot only for the winning side's positions.
-    // Draws → null on both sides (skip policy loss).
+    // Policy target:
+    //   - If a mate-in-1 was on the board at this position, emit the
+    //     corrective target (push mass onto mate indices, push it off
+    //     every other legal move). This happens regardless of who won
+    //     and regardless of which move was actually played — every
+    //     available checkmate must produce a training example for the
+    //     mate move.
+    //   - Otherwise: one-hot on the played move, but only for the
+    //     winning side's positions. Draws and losers' moves → null.
     let policyTarget: Float32Array | null = null;
-    const isWinner =
-      finalOutcome !== 'draw' &&
-      ((finalOutcome === 'white-wins' && record.sideToMove === 'w') ||
-        (finalOutcome === 'black-wins' && record.sideToMove === 'b'));
-
-    if (isWinner) {
-      policyTarget = new Float32Array(POLICY_SIZE);
-      const idx = policyIndexFromUci(record.move);
-      policyTarget[idx] = 1;
+    if (record.mateMoveIndices && record.mateMoveIndices.length > 0) {
+      policyTarget = correctivePolicyTarget(
+        record.legalMoveIndices,
+        record.mateMoveIndices,
+      );
+    } else {
+      const isWinner =
+        finalOutcome !== 'draw' &&
+        ((finalOutcome === 'white-wins' && record.sideToMove === 'w') ||
+          (finalOutcome === 'black-wins' && record.sideToMove === 'b'));
+      if (isWinner) {
+        policyTarget = new Float32Array(POLICY_SIZE);
+        const idx = policyIndexFromUci(record.move);
+        policyTarget[idx] = 1;
+      }
     }
 
     return {
@@ -302,6 +362,34 @@ export function buildTrainingExamples(
       legalMoveIndices: record.legalMoveIndices,
     };
   });
+}
+
+/**
+ * Build a corrective policy target for a position where mate-in-1 was
+ * available. Positive mass is spread uniformly over the mate indices
+ * (sums to +1); negative mass is spread uniformly over every other
+ * legal index (sums to -1). Cross-entropy then pulls the softmax up on
+ * mate moves and pushes it down on every other legal alternative.
+ *
+ * Illegal indices stay at zero — the existing illegal-move penalty in
+ * `ChessNet.trainBatch` is what keeps mass off them.
+ */
+function correctivePolicyTarget(
+  legalIndices: number[],
+  mateIndices: number[],
+): Float32Array {
+  const target = new Float32Array(POLICY_SIZE);
+  const mateSet = new Set(mateIndices);
+  const nonMate = legalIndices.filter(i => !mateSet.has(i));
+  if (mateIndices.length > 0) {
+    const w = 1 / mateIndices.length;
+    for (const i of mateIndices) target[i] = w;
+  }
+  if (nonMate.length > 0) {
+    const w = -1 / nonMate.length;
+    for (const i of nonMate) target[i] = w;
+  }
+  return target;
 }
 
 // ── buildImitationExamples ────────────────────────────────────────────────────
@@ -345,8 +433,17 @@ export function buildImitationExamples(
       valueTarget = record.sideToMove === 'b' ? 1 : -1;
     }
 
-    const policyTarget = new Float32Array(POLICY_SIZE);
-    policyTarget[policyIndexFromUci(record.move)] = 1;
+    // When mate-in-1 was on the board, override the user's actual move
+    // with the corrective target so the imitator doesn't learn to miss
+    // free mates. Otherwise behaviour-clone as usual.
+    const policyTarget =
+      record.mateMoveIndices && record.mateMoveIndices.length > 0
+        ? correctivePolicyTarget(record.legalMoveIndices, record.mateMoveIndices)
+        : (() => {
+            const t = new Float32Array(POLICY_SIZE);
+            t[policyIndexFromUci(record.move)] = 1;
+            return t;
+          })();
 
     return {
       features: record.features,
@@ -382,10 +479,17 @@ export function createOpponent(opts: CreateOpponentOptions): Opponent {
     };
 
     const result = await search(state, policy, searchConfig);
-    const { rootValue, visitCounts, priorPolicy, edgeValues } = result;
+    const { rootValue, visitCounts, priorPolicy, edgeValues, mateInOneMoves } = result;
 
+    // Mate-in-1 always wins: bypass the temperature sampler entirely
+    // so a sampled run can't randomly leave a free checkmate on the
+    // board. `search()` already lists every mate-in-1 root move; pick
+    // the lexicographically-first one to match `bestMove`.
     const temperature = config.temperature ?? 0;
-    const move = pickMove(visitCounts, priorPolicy, temperature, config.rng);
+    const move =
+      mateInOneMoves.length > 0
+        ? mateInOneMoves[0]
+        : pickMove(visitCounts, priorPolicy, temperature, config.rng);
 
     return { move, rootValue, visitCounts, priorPolicy, edgeValues };
   };

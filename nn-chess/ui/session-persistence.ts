@@ -25,7 +25,7 @@ import {
 import type { GameState, Move, Outcome } from '../core/rules/index.js';
 import { encodeState } from '../core/encoding/index.js';
 import type { GameMoveRecord } from '../core/opponent/index.js';
-import { legalMoveIndicesFor } from '../core/opponent/index.js';
+import { legalMoveIndicesFor, mateInOneIndicesFor } from '../core/opponent/index.js';
 import {
   getJson,
   putJson,
@@ -70,6 +70,7 @@ export function restoreSession(saved: PersistedSession): RestoredSession {
       move,
       sideToMove: sideToMove(state),
       legalMoveIndices: legalMoveIndicesFor(state),
+      mateMoveIndices: mateInOneIndicesFor(state),
     });
     state = applyMove(state, move);
   }

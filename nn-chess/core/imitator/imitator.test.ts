@@ -52,6 +52,7 @@ function moveRecord(side: 'w' | 'b', uci: string): GameMoveRecord {
     move: uci,
     sideToMove: side,
     legalMoveIndices: [policyIndexFromUci(uci)],
+    mateMoveIndices: [],
   };
 }
 

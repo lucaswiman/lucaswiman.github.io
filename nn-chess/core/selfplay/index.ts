@@ -33,6 +33,7 @@ import {
 import {
   buildTrainingExamples,
   legalMoveIndicesFor,
+  mateInOneIndicesFor,
   type GameMoveRecord,
 } from '../opponent/index.js';
 import type { TrainingExample } from '../nn/index.js';
@@ -188,6 +189,7 @@ export async function playOneGame(
       move,
       sideToMove: side,
       legalMoveIndices: legalMoveIndicesFor(state),
+      mateMoveIndices: mateInOneIndicesFor(state),
     };
     if (side === 'w') whiteMoves.push(record);
     else blackMoves.push(record);
