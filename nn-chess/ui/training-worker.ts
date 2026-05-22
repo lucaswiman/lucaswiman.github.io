@@ -18,8 +18,6 @@
  * up in any environment.
  */
 
-import * as tf from '@tensorflow/tfjs';
-import { setWasmPaths } from '@tensorflow/tfjs-backend-wasm';
 import { ChessNet, deserialize } from '../core/nn/index.js';
 import {
   createReplayBuffer,
@@ -27,21 +25,18 @@ import {
   type ReplayBuffer,
 } from '../core/training/index.js';
 import type { TrainRequest, TrainResponse } from './training-protocol.js';
+import { installWorkerErrorHandlers, initBackend } from './worker-init.js';
+
+// Forward any top-level error or unhandled rejection back through the
+// message channel — `worker.onerror` on the parent side is often empty
+// (especially on iOS Safari), so going via postMessage is the only way
+// to surface a useful diagnostic.
+installWorkerErrorHandlers();
 
 // Load the WASM binaries from CDN so they don't bloat the app bundle.
-// Fall back to CPU if WASM isn't available (e.g. older browsers).
-// Stored as a promise so the message handler can await it without
-// requiring top-level await, which is incompatible with IIFE worker bundles.
-const backendReady: Promise<void> = (async () => {
-  setWasmPaths(
-    'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/',
-  );
-  try {
-    await tf.setBackend('wasm');
-  } catch {
-    await tf.setBackend('cpu');
-  }
-})();
+// Fall back to CPU if WASM isn't available; if both fail, the worker
+// still tries to run with the default tfjs backend.
+const backendReady: Promise<void> = initBackend();
 
 // ── Worker state ──────────────────────────────────────────────────────────────
 

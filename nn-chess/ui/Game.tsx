@@ -684,6 +684,7 @@ export default function Game() {
         onAgentRefresh={handleAgentRefresh}
         autoEnabled={autoSelfPlay}
         onAutoEnabledChange={handleAutoSelfPlayChange}
+        simulations={simulations}
       />
 
       <InspectorPanel

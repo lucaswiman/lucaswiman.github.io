@@ -18,6 +18,7 @@
  */
 
 import type { TrainRequest, TrainResponse } from './training-protocol.js';
+import { formatWorkerErrorEvent } from './worker-error.js';
 
 export type TrainStartParams = Extract<TrainRequest, { kind: 'start' }>;
 
@@ -68,7 +69,12 @@ export class TrainingClient {
     };
 
     this.worker.onerror = (event) => {
-      onError(`Worker error: ${event.message}`);
+      onError(`Worker error: ${formatWorkerErrorEvent(event)}`);
+      this._cleanup();
+    };
+
+    this.worker.onmessageerror = (event) => {
+      onError(`Worker messageerror: failed to deserialize message ${String(event.data ?? '')}`);
       this._cleanup();
     };
 
