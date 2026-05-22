@@ -50,10 +50,13 @@ import {
 //   2. Qf7#   king on f8 has no escape, queen defended by Ke6.
 const MATE_IN_2_FEN = '4k3/8/4K3/8/8/8/8/3Q4 w - - 0 1';
 
-// The mate-in-2 mainline, indexed by step. We pass each ply's "correct"
-// move down to the candidate table so it's always rendered even when
-// cold-start MCTS doesn't visit it enough to land in the top-N by visit
-// count. The check that the move is actually legal in the current state
+// One concrete mate-in-2 line, indexed by step. The position has
+// several mating first moves (Kf8 is black's only legal reply to any
+// non-checking white move), so this isn't a unique mainline — it's
+// just the line we pin into the candidate table so the user always
+// sees a complete mating sequence even when cold-start MCTS doesn't
+// visit these moves enough to land them in the top-N by visit count.
+// The check that the move is actually legal in the current state
 // happens in the table, so deviating from the line just hides the
 // downstream hints.
 const MATE_LINE: readonly Move[] = ['d1d7', 'e8f8', 'd7f7'];
@@ -321,12 +324,16 @@ export default function MctsExplainer() {
         {error && <span style={{ color: '#c00' }}>{error}</span>}
       </div>
 
-      <p style={{ marginTop: 0, color: '#444' }}>
+      <p style={{ marginTop: 0, color: '#d6dde6' }}>
         Mate-in-2 (white to move). White's queen is on d1; the
-        kings face off on the e-file. The forced sequence is
-        {' '}<code>1. Qd7+ Kf8 2. Qf7#</code>. Click any candidate move in
-        the table to advance to the resulting position and trigger a new
-        MCTS search there.
+        kings face off on the e-file. Black's only legal reply to any
+        non-checking white move is <code>Kf8</code>, so several first
+        moves mate in two — e.g. <code>1. Qd7+ Kf8 2. Qf7#</code>,
+        {' '}<code>1. Qd5 Kf8 2. Qf7#</code>, or <code>1. Kf6 Kf8 2. Qd8#</code>.
+        The row tagged <em>pinned</em> below is just the line we always
+        keep visible in the table; it's one mating sequence, not the
+        only one. Click any candidate move to advance to the resulting
+        position and trigger a new MCTS search there.
       </p>
 
       {steps.map((step, idx) => (
@@ -365,9 +372,10 @@ interface StepViewProps {
   onChoose: (stepIndex: number, move: Move) => void;
   simulations: number;
   cPuct: number;
-  // The mate-mainline move expected at this ply, when one is defined.
-  // CandidateTable surfaces it as a pinned row even when it's outside
-  // the visit-count top-N, so the user can always read its Q/N/U.
+  // The pinned mate-line move expected at this ply, when one is
+  // defined. CandidateTable surfaces it as a pinned row even when
+  // it's outside the visit-count top-N, so the user can always read
+  // its Q/N/U. (Not "the" mainline — see MATE_LINE comment above.)
   featuredMove?: Move;
 }
 
@@ -389,13 +397,13 @@ function StepView({ step, stepIndex, isLast, onChoose, simulations, cPuct, featu
     >
       <div style={{ marginBottom: '8px', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
         <strong>Ply {ply}</strong>
-        <span style={{ color: '#444' }}>
+        <span style={{ color: '#222' }}>
           {step.finalOutcome === null
             ? `${sideLabel} to move`
             : `Final position (${outcomeLabel(step.finalOutcome)})`}
         </span>
         {step.finalOutcome === null && (
-          <span style={{ fontSize: '0.85em', color: '#777' }}>
+          <span style={{ fontSize: '0.85em', color: '#4a4a4a' }}>
             evaluator: <code>{step.net}</code> network
           </span>
         )}
@@ -489,7 +497,7 @@ function CandidateTable({ search, chosen, onChoose, simulations, cPuct, featured
 
   return (
     <>
-      <div style={{ fontSize: '0.85em', color: '#666', marginBottom: '6px' }}>
+      <div style={{ fontSize: '0.85em', color: '#3a3a3a', marginBottom: '6px' }}>
         Top {rows.length} candidates by visit count
         {' '}({totalVisits.toLocaleString()} sim{totalVisits === 1 ? '' : 's'} total).
         Click a row to play that move.
@@ -503,7 +511,7 @@ function CandidateTable({ search, chosen, onChoose, simulations, cPuct, featured
         }}
       >
         <thead>
-          <tr style={{ color: '#666', textAlign: 'right', borderBottom: '1px solid #ddd' }}>
+          <tr style={{ color: '#2e2e2e', textAlign: 'right', borderBottom: '1px solid #c8c8c8' }}>
             <th style={{ padding: '4px 8px', textAlign: 'left' }}>move</th>
             <th style={{ padding: '4px 8px' }} title="visit count N(s,a)">N</th>
             <th style={{ padding: '4px 8px' }} title="visit fraction = N(s,a) / sum of N">N%</th>
@@ -531,14 +539,14 @@ function CandidateTable({ search, chosen, onChoose, simulations, cPuct, featured
                     <span style={{ color: '#1e5fb4', marginLeft: '6px', fontWeight: 'bold' }}>← played</span>
                   )}
                   {isFeatured && !isChosen && (
-                    <span style={{ color: '#7a5e1e', marginLeft: '6px', fontStyle: 'italic' }}>(mainline)</span>
+                    <span style={{ color: '#5a4410', marginLeft: '6px', fontStyle: 'italic' }}>(pinned)</span>
                   )}
                 </td>
                 <td style={{ padding: '4px 8px', textAlign: 'right' }}>{row.visits}</td>
                 <td style={{ padding: '4px 8px', textAlign: 'right' }}>
                   {totalVisits === 0 ? '—' : (row.visits / totalVisits * 100).toFixed(1)}
                 </td>
-                <td style={{ padding: '4px 8px', textAlign: 'right', color: '#777' }}>
+                <td style={{ padding: '4px 8px', textAlign: 'right', color: '#555' }}>
                   {(row.prior * 100).toFixed(1)}
                 </td>
                 <td style={{
@@ -548,7 +556,7 @@ function CandidateTable({ search, chosen, onChoose, simulations, cPuct, featured
                 }}>
                   {row.q >= 0 ? '+' : ''}{row.q.toFixed(3)}
                 </td>
-                <td style={{ padding: '4px 8px', textAlign: 'right', color: '#777' }}>
+                <td style={{ padding: '4px 8px', textAlign: 'right', color: '#555' }}>
                   {row.u.toFixed(3)}
                 </td>
               </tr>
@@ -557,9 +565,9 @@ function CandidateTable({ search, chosen, onChoose, simulations, cPuct, featured
         </tbody>
       </table>
       {search.visitCounts.size > rows.length && (
-        <div style={{ marginTop: '6px', fontSize: '0.78em', color: '#888' }}>
+        <div style={{ marginTop: '6px', fontSize: '0.78em', color: '#4a4a4a' }}>
           + {search.visitCounts.size - rows.length} other move{search.visitCounts.size - rows.length === 1 ? '' : 's'} not shown
-          {featuredPinned ? ' (mainline pinned below visit-count top 5).' : '.'}
+          {featuredPinned ? ' (one mating line pinned below visit-count top 5).' : '.'}
         </div>
       )}
     </>
