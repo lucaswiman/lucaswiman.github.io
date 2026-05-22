@@ -16,8 +16,9 @@ import {
 import type { GameState, Move, Outcome } from '../core/rules/index.js';
 import { encodeState } from '../core/encoding/index.js';
 import type { Opponent, GameMoveRecord } from '../core/opponent/index.js';
-import { legalMoveIndicesFor } from '../core/opponent/index.js';
+import { legalMoveIndicesFor, OPPONENT_STORAGE_KEYS } from '../core/opponent/index.js';
 import type { PlayerImitator } from '../core/imitator/index.js';
+import { IMITATOR_STORAGE_KEYS } from '../core/imitator/index.js';
 import type { SearchResult } from '../core/mcts/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
 import { getJson, putJson } from '../core/storage/index.js';
@@ -443,6 +444,74 @@ export default function Game() {
     }
   }, [storage]);
 
+  // Danger zone: delete one of {weights, replay} for one of {opponent,
+  // imitator} and reload. Deleting weights+meta forces `loadOpponent` /
+  // `loadPlayerImitator` to fall through their version checks and
+  // return a fresh randomly-initialized net. Deleting replay drops the
+  // recorded training examples without touching the weights. Both
+  // operations are confirmed with a native dialog before they run.
+  const handleClearOpponentHistory = useCallback(async () => {
+    if (!window.confirm(
+      'Clear ALL recorded opponent training examples? This cannot be undone. '
+      + 'The opponent\'s weights will be kept.',
+    )) return;
+    try {
+      await storage.delete(OPPONENT_STORAGE_KEYS.REPLAY);
+      await handleOpponentRefresh();
+    } catch (err) {
+      setError(`Failed to clear opponent history: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [storage, handleOpponentRefresh]);
+
+  const handleClearImitatorHistory = useCallback(async () => {
+    if (!window.confirm(
+      'Clear ALL recorded user moves (the imitator\'s training examples)? '
+      + 'This cannot be undone. The imitator\'s weights will be kept.',
+    )) return;
+    try {
+      await storage.delete(IMITATOR_STORAGE_KEYS.REPLAY);
+      await handleOpponentRefresh();
+    } catch (err) {
+      setError(`Failed to clear imitator history: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [storage, handleOpponentRefresh]);
+
+  const handleResetOpponentModel = useCallback(async () => {
+    if (!window.confirm(
+      'Reset the opponent model to a freshly-initialized network? '
+      + 'This deletes the trained weights and the recorded training examples. '
+      + 'This cannot be undone.',
+    )) return;
+    try {
+      await Promise.all([
+        storage.delete(OPPONENT_STORAGE_KEYS.WEIGHTS),
+        storage.delete(OPPONENT_STORAGE_KEYS.META),
+        storage.delete(OPPONENT_STORAGE_KEYS.REPLAY),
+      ]);
+      await handleOpponentRefresh();
+    } catch (err) {
+      setError(`Failed to reset opponent model: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [storage, handleOpponentRefresh]);
+
+  const handleResetImitatorModel = useCallback(async () => {
+    if (!window.confirm(
+      'Reset the imitator model to a freshly-initialized network? '
+      + 'This deletes the trained weights and the recorded user moves. '
+      + 'This cannot be undone.',
+    )) return;
+    try {
+      await Promise.all([
+        storage.delete(IMITATOR_STORAGE_KEYS.WEIGHTS),
+        storage.delete(IMITATOR_STORAGE_KEYS.META),
+        storage.delete(IMITATOR_STORAGE_KEYS.REPLAY),
+      ]);
+      await handleOpponentRefresh();
+    } catch (err) {
+      setError(`Failed to reset imitator model: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [storage, handleOpponentRefresh]);
+
   if (opponent === null && error === null) {
     return <div style={{ fontFamily: 'sans-serif', padding: '16px' }}>Loading opponent…</div>;
   }
@@ -705,6 +774,60 @@ export default function Game() {
         lastSearch={lastSearch}
         opponentVersion={opponentVersion}
       />
+
+      <details
+        style={{
+          marginTop: '24px',
+          border: '1px solid #d99',
+          borderRadius: '6px',
+          padding: '10px 14px',
+          background: '#fff5f5',
+          color: '#1a1a1a',
+        }}
+      >
+        <summary style={{ cursor: 'pointer', fontWeight: 'bold', userSelect: 'none', color: '#a33' }}>
+          Danger zone
+        </summary>
+        <div style={{ marginTop: '10px', fontSize: '0.9em', color: '#444' }}>
+          Each action is destructive and applies only to your browser's local
+          storage. Trained weights and recorded games cannot be recovered
+          after deletion.
+        </div>
+        <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' }}>
+          <button
+            type="button"
+            onClick={handleClearOpponentHistory}
+            disabled={opponent === null}
+            style={{ padding: '5px 14px', cursor: opponent ? 'pointer' : 'not-allowed' }}
+          >
+            Clear opponent move history
+          </button>
+          <button
+            type="button"
+            onClick={handleClearImitatorHistory}
+            disabled={imitator === null}
+            style={{ padding: '5px 14px', cursor: imitator ? 'pointer' : 'not-allowed' }}
+          >
+            Clear user (imitator) move history
+          </button>
+          <button
+            type="button"
+            onClick={handleResetOpponentModel}
+            disabled={opponent === null}
+            style={{ padding: '5px 14px', cursor: opponent ? 'pointer' : 'not-allowed', color: '#a33' }}
+          >
+            Reset opponent model
+          </button>
+          <button
+            type="button"
+            onClick={handleResetImitatorModel}
+            disabled={imitator === null}
+            style={{ padding: '5px 14px', cursor: imitator ? 'pointer' : 'not-allowed', color: '#a33' }}
+          >
+            Reset imitator model
+          </button>
+        </div>
+      </details>
     </div>
   );
 }
