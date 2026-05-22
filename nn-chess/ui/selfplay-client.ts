@@ -8,8 +8,8 @@
  * Usage:
  *   const client = new SelfPlayClient();
  *   client.start(
- *     { aiWeights, imitatorWeights, replay, replayCapacity, search,
- *       count, maxPlies, gradientSteps, gradientBatchSize },
+ *     { opponentWeights, imitatorWeights, replay, replayCapacity,
+ *       search, count, maxPlies, gradientSteps, gradientBatchSize },
  *     (game)   => updateBatchCounter(game),
  *     (step)   => showLoss(step),
  *     (result) => persistWeights(result),
@@ -23,12 +23,16 @@ import type { SelfPlayRequest, SelfPlayResponse } from './selfplay-protocol.js';
 import { formatWorkerErrorEvent } from './worker-error.js';
 
 export type SelfPlayStartParams = Extract<SelfPlayRequest, { kind: 'start' }>;
+export type GymStartParams = Extract<SelfPlayRequest, { kind: 'start-gym' }>;
 
 export type GameCallback = (game: Extract<SelfPlayResponse, { kind: 'game' }>) => void;
 export type StepCallback = (step: Extract<SelfPlayResponse, { kind: 'step' }>) => void;
 export type DoneCallback = (result: Extract<SelfPlayResponse, { kind: 'done' }>) => void;
 export type ErrorCallback = (message: string) => void;
 export type PlyCallback = (ply: Extract<SelfPlayResponse, { kind: 'ply' }>) => void;
+export type ScenarioDoneCallback = (
+  info: Extract<SelfPlayResponse, { kind: 'scenario-done' }>,
+) => void;
 
 export class SelfPlayClient {
   private worker: Worker | null = null;
@@ -69,6 +73,8 @@ export class SelfPlayClient {
         onStep(msg);
       } else if (msg.kind === 'ply') {
         onPly?.(msg);
+      } else if (msg.kind === 'scenario-done') {
+        // The plain `start` flow never emits these — ignore silently.
       } else if (msg.kind === 'done') {
         onDone(msg);
         this._cleanup();
@@ -91,7 +97,66 @@ export class SelfPlayClient {
     const req: SelfPlayRequest = { kind: 'start', ...params };
     // Transfer ownership of the byte buffers to avoid a copy.
     this.worker.postMessage(req, [
-      params.aiWeights.buffer,
+      params.opponentWeights.buffer,
+      params.imitatorWeights.buffer,
+      params.replay.buffer,
+      params.imitatorReplay.buffer,
+    ]);
+  }
+
+  /**
+   * Endgame gym variant of `start`. Forwards the scenario list to the
+   * worker's gym handler. Callbacks line up with the regular self-play
+   * flow plus a per-scenario `onScenarioDone` channel.
+   */
+  startGym(
+    params: Omit<GymStartParams, 'kind'>,
+    onGame: GameCallback,
+    onScenarioDone: ScenarioDoneCallback,
+    onStep: StepCallback,
+    onDone: DoneCallback,
+    onError: ErrorCallback,
+    onPly?: PlyCallback,
+  ): void {
+    this.stop();
+
+    this.worker = new Worker(
+      new URL('./selfplay-worker.ts', import.meta.url),
+      { type: 'module' },
+    );
+
+    this.worker.onmessage = (event: MessageEvent<SelfPlayResponse>) => {
+      const msg = event.data;
+      if (msg.kind === 'game') {
+        onGame(msg);
+      } else if (msg.kind === 'scenario-done') {
+        onScenarioDone(msg);
+      } else if (msg.kind === 'step') {
+        onStep(msg);
+      } else if (msg.kind === 'ply') {
+        onPly?.(msg);
+      } else if (msg.kind === 'done') {
+        onDone(msg);
+        this._cleanup();
+      } else if (msg.kind === 'error') {
+        onError(msg.message);
+        this._cleanup();
+      }
+    };
+
+    this.worker.onerror = (event) => {
+      onError(`Worker error: ${formatWorkerErrorEvent(event)}`);
+      this._cleanup();
+    };
+
+    this.worker.onmessageerror = (event) => {
+      onError(`Worker messageerror: failed to deserialize message ${String(event.data ?? '')}`);
+      this._cleanup();
+    };
+
+    const req: SelfPlayRequest = { kind: 'start-gym', ...params };
+    this.worker.postMessage(req, [
+      params.opponentWeights.buffer,
       params.imitatorWeights.buffer,
       params.replay.buffer,
       params.imitatorReplay.buffer,

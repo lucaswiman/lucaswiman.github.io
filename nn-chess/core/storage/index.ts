@@ -1,5 +1,5 @@
 // Abstract persistence layer for trained NN weights, replay buffers,
-// and any other artifacts the agent wants to keep around between
+// and any other artifacts the opponent wants to keep around between
 // sessions.
 //
 // `core/` only ever touches this interface. Concrete adapters
@@ -39,7 +39,7 @@ export interface BlobStorage {
 // --- JSON helpers -------------------------------------------------------
 //
 // Most things we want to persist (training metadata, replay-buffer
-// indices, the agent's config) are JSON-shaped. These helpers
+// indices, the opponent's config) are JSON-shaped. These helpers
 // centralize the encode/decode so callers don't sprinkle TextEncoder
 // usage everywhere.
 
@@ -66,7 +66,7 @@ export async function getJson<T = unknown>(
 /**
  * Convenience namespace wrapper. Returns a `BlobStorage` whose keys
  * are all transparently prefixed with `prefix + '/'`. Useful for
- * partitioning a single underlying store into per-agent or per-run
+ * partitioning a single underlying store into per-opponent or per-run
  * scopes.
  */
 export function namespaced(

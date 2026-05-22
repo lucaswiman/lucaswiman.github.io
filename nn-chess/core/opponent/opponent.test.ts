@@ -1,12 +1,13 @@
-// Unit tests for core/agent/index.ts.
+// Unit tests for core/opponent/index.ts.
 
 import { describe, expect, it } from 'vitest';
 import {
   buildTrainingExamples,
   policyFromNet,
-  createAgent,
-  loadAgent,
-  AGENT_STORAGE_KEYS,
+  createOpponent,
+  loadOpponent,
+  legalMoveIndicesFor,
+  OPPONENT_STORAGE_KEYS,
   type GameMoveRecord,
 } from './index.js';
 import { ChessNet, POLICY_SIZE, NN_VERSION, policyIndexFromUci } from '../nn/index.js';
@@ -45,8 +46,18 @@ function twoMoveGame(): GameMoveRecord[] {
   const move1 = moves1[0];
 
   return [
-    { features: encodeState(state0), move: move0, sideToMove: 'w' },
-    { features: encodeState(state1), move: move1, sideToMove: 'b' },
+    {
+      features: encodeState(state0),
+      move: move0,
+      sideToMove: 'w',
+      legalMoveIndices: legalMoveIndicesFor(state0),
+    },
+    {
+      features: encodeState(state1),
+      move: move1,
+      sideToMove: 'b',
+      legalMoveIndices: legalMoveIndicesFor(state1),
+    },
   ];
 }
 
@@ -142,6 +153,7 @@ describe('buildTrainingExamples', () => {
         features: encodeState(state),
         move,
         sideToMove: sideToMove(state),
+        legalMoveIndices: legalMoveIndicesFor(state),
       });
       state = applyMove(state, move);
     }
@@ -214,14 +226,14 @@ describe('policyFromNet', () => {
   });
 });
 
-// ── createAgent / selectMove ──────────────────────────────────────────────────
+// ── createOpponent / selectMove ──────────────────────────────────────────────
 
-describe('createAgent / selectMove', () => {
+describe('createOpponent / selectMove', () => {
   it('temperature=0 and deterministic rng: selectMove returns the highest-visit move', async () => {
     const net = ChessNet.create({ seed: 42 });
     const buf = createReplayBuffer(1000);
     const rng = makePrng(7);
-    const agent = createAgent({
+    const opponent = createOpponent({
       net,
       replayBuffer: buf,
       config: {
@@ -233,7 +245,7 @@ describe('createAgent / selectMove', () => {
     });
 
     const state = initialState();
-    const { move, visitCounts } = await agent.selectMove(state);
+    const { move, visitCounts } = await opponent.selectMove(state);
 
     // The returned move must be the one with the most visits.
     const bestN = Math.max(...Array.from(visitCounts.values()));
@@ -246,7 +258,7 @@ describe('createAgent / selectMove', () => {
     const state = initialState();
 
     const runWithSeed = async (seed: number) => {
-      const agent = createAgent({
+      const opponent = createOpponent({
         net,
         replayBuffer: buf,
         config: {
@@ -256,7 +268,7 @@ describe('createAgent / selectMove', () => {
           rng: makePrng(seed),
         },
       });
-      const { move } = await agent.selectMove(state);
+      const { move } = await opponent.selectMove(state);
       return move;
     };
 
@@ -268,7 +280,7 @@ describe('createAgent / selectMove', () => {
   it('selectMove returns a legal move', async () => {
     const net = ChessNet.create({ seed: 42 });
     const buf = createReplayBuffer(1000);
-    const agent = createAgent({
+    const opponent = createOpponent({
       net,
       replayBuffer: buf,
       config: {
@@ -280,7 +292,7 @@ describe('createAgent / selectMove', () => {
     });
 
     const state = initialState();
-    const { move } = await agent.selectMove(state);
+    const { move } = await opponent.selectMove(state);
     const legal = legalMoves(state);
     expect(legal).toContain(move);
   }, 30_000);
@@ -288,48 +300,48 @@ describe('createAgent / selectMove', () => {
   it('recordGameResult adds examples to the replay buffer', () => {
     const net = ChessNet.create({ seed: 42 });
     const buf = createReplayBuffer(1000);
-    const agent = createAgent({
+    const opponent = createOpponent({
       net,
       replayBuffer: buf,
       config: { simulations: 10, cPuct: 1.5 },
     });
 
-    expect(agent.replayBuffer.size()).toBe(0);
-    agent.recordGameResult(twoMoveGame(), 'white-wins');
-    expect(agent.replayBuffer.size()).toBe(2);
+    expect(opponent.replayBuffer.size()).toBe(0);
+    opponent.recordGameResult(twoMoveGame(), 'white-wins');
+    expect(opponent.replayBuffer.size()).toBe(2);
   });
 
   it('recordGameResult with ongoing outcome throws', () => {
     const net = ChessNet.create({ seed: 42 });
     const buf = createReplayBuffer(1000);
-    const agent = createAgent({
+    const opponent = createOpponent({
       net,
       replayBuffer: buf,
       config: { simulations: 10, cPuct: 1.5 },
     });
 
-    expect(() => agent.recordGameResult(twoMoveGame(), 'ongoing')).toThrow();
+    expect(() => opponent.recordGameResult(twoMoveGame(), 'ongoing')).toThrow();
   });
 
   it('trainStep returns null when buffer is smaller than batchSize', async () => {
     const net = ChessNet.create({ seed: 42 });
     const buf = createReplayBuffer(1000);
-    const agent = createAgent({
+    const opponent = createOpponent({
       net,
       replayBuffer: buf,
       config: { simulations: 10, cPuct: 1.5 },
     });
 
-    agent.recordGameResult(twoMoveGame(), 'white-wins');
+    opponent.recordGameResult(twoMoveGame(), 'white-wins');
     // Buffer has 2 examples; requesting batch of 32 should return null.
-    const result = await agent.trainStep(32);
+    const result = await opponent.trainStep(32);
     expect(result).toBeNull();
   });
 
   it('trainStep returns losses when buffer is large enough', async () => {
     const net = ChessNet.create({ seed: 42 });
     const buf = createReplayBuffer(1000);
-    const agent = createAgent({
+    const opponent = createOpponent({
       net,
       replayBuffer: buf,
       config: { simulations: 10, cPuct: 1.5 },
@@ -337,10 +349,10 @@ describe('createAgent / selectMove', () => {
 
     // Fill buffer with enough examples.
     for (let i = 0; i < 5; i++) {
-      agent.recordGameResult(twoMoveGame(), i % 2 === 0 ? 'white-wins' : 'black-wins');
+      opponent.recordGameResult(twoMoveGame(), i % 2 === 0 ? 'white-wins' : 'black-wins');
     }
     // Buffer has 10 examples; request batch of 4.
-    const result = await agent.trainStep(4);
+    const result = await opponent.trainStep(4);
     expect(result).not.toBeNull();
     expect(typeof result!.valueLoss).toBe('number');
     expect(typeof result!.policyLoss).toBe('number');
@@ -348,49 +360,49 @@ describe('createAgent / selectMove', () => {
   });
 });
 
-// ── loadAgent ────────────────────────────────────────────────────────────────
+// ── loadOpponent ─────────────────────────────────────────────────────────────
 
-describe('loadAgent', () => {
-  it('fresh storage → fresh agent with empty replay buffer', async () => {
+describe('loadOpponent', () => {
+  it('fresh storage → fresh opponent with empty replay buffer', async () => {
     const storage = createMemoryStorage();
     const net = ChessNet.create({ seed: 42 });
-    const agent = await loadAgent(storage, {
+    const opponent = await loadOpponent(storage, {
       net,
       config: { simulations: 10, cPuct: 1.5 },
       replayCapacity: 100,
     });
 
-    expect(agent.replayBuffer.size()).toBe(0);
-    expect(agent.replayBuffer.capacity()).toBe(100);
+    expect(opponent.replayBuffer.size()).toBe(0);
+    expect(opponent.replayBuffer.capacity()).toBe(100);
     // Net should produce the same result as the supplied net.
     const state = initialState();
     const features = encodeState(state);
     const pred1 = net.predict(features);
-    const pred2 = agent.net.predict(features);
+    const pred2 = opponent.net.predict(features);
     expect(pred1.value).toBeCloseTo(pred2.value, 5);
   });
 
-  it('saveTo then loadAgent: loaded agent has same NN predictions and replay buffer contents', async () => {
+  it('saveTo then loadOpponent: loaded opponent has same NN predictions and replay buffer contents', async () => {
     const storage = createMemoryStorage();
     const net = ChessNet.create({ seed: 42 });
     const buf = createReplayBuffer(100);
-    const agent = createAgent({
+    const opponent = createOpponent({
       net,
       replayBuffer: buf,
       config: { simulations: 10, cPuct: 1.5 },
     });
 
     // Add some training data.
-    agent.recordGameResult(twoMoveGame(), 'white-wins');
-    agent.recordGameResult(twoMoveGame(), 'draw');
-    expect(agent.replayBuffer.size()).toBe(4);
+    opponent.recordGameResult(twoMoveGame(), 'white-wins');
+    opponent.recordGameResult(twoMoveGame(), 'draw');
+    expect(opponent.replayBuffer.size()).toBe(4);
 
     // Persist.
-    await agent.saveTo(storage);
+    await opponent.saveTo(storage);
 
     // Restore.
     const net2 = ChessNet.create({ seed: 999 }); // different seed → different weights initially
-    const loaded = await loadAgent(storage, {
+    const loaded = await loadOpponent(storage, {
       net: net2,
       config: { simulations: 10, cPuct: 1.5 },
       replayCapacity: 100,
@@ -403,7 +415,7 @@ describe('loadAgent', () => {
     expect(loadedPred.value).toBeCloseTo(origPred.value, 3);
 
     // Replay buffer should have same contents.
-    const origSnap = agent.replayBuffer.snapshot();
+    const origSnap = opponent.replayBuffer.snapshot();
     const loadedSnap = loaded.replayBuffer.snapshot();
     expect(loadedSnap).toHaveLength(origSnap.length);
     for (let i = 0; i < origSnap.length; i++) {
@@ -417,20 +429,20 @@ describe('loadAgent', () => {
     const storage = createMemoryStorage();
     const net = ChessNet.create({ seed: 42 });
     const buf = createReplayBuffer(100);
-    const agent = createAgent({
+    const opponent = createOpponent({
       net,
       replayBuffer: buf,
       config: { simulations: 10, cPuct: 1.5 },
     });
-    agent.recordGameResult(twoMoveGame(), 'white-wins');
-    await agent.saveTo(storage);
+    opponent.recordGameResult(twoMoveGame(), 'white-wins');
+    await opponent.saveTo(storage);
 
     // Tamper with the stored NN_VERSION.
     const { putJson: putJ } = await import('../storage/index.js');
-    await putJ(storage, AGENT_STORAGE_KEYS.META, { NN_VERSION: NN_VERSION + 999 });
+    await putJ(storage, OPPONENT_STORAGE_KEYS.META, { NN_VERSION: NN_VERSION + 999 });
 
     const net2 = ChessNet.create({ seed: 7 });
-    const loaded = await loadAgent(storage, {
+    const loaded = await loadOpponent(storage, {
       net: net2,
       config: { simulations: 10, cPuct: 1.5 },
       replayCapacity: 100,
@@ -440,14 +452,14 @@ describe('loadAgent', () => {
     expect(loaded.replayBuffer.size()).toBe(0);
   });
 
-  it('missing WEIGHTS key → returns fresh agent', async () => {
+  it('missing WEIGHTS key → returns fresh opponent', async () => {
     const storage = createMemoryStorage();
     // Write meta with correct version but no weights.
     const { putJson: putJ } = await import('../storage/index.js');
-    await putJ(storage, AGENT_STORAGE_KEYS.META, { NN_VERSION });
+    await putJ(storage, OPPONENT_STORAGE_KEYS.META, { NN_VERSION });
 
     const net = ChessNet.create({ seed: 42 });
-    const loaded = await loadAgent(storage, {
+    const loaded = await loadOpponent(storage, {
       net,
       config: { simulations: 10, cPuct: 1.5 },
       replayCapacity: 50,

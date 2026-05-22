@@ -7,12 +7,12 @@
  *
  * A self-play run is three phases inside one worker invocation:
  *   1. Run `gradientSteps` gradient steps on the imitator from its own
- *      replay buffer, so the AI's self-play opponent reflects the
+ *      replay buffer, so the opponent's self-play stand-in reflects the
  *      user's latest moves before games are generated.
- *   2. Play `count` MCTS games between the AI net and the (just-updated)
- *      imitator net, collecting AlphaZero-style training examples for
- *      the AI's side.
- *   3. Run `gradientSteps` gradient steps on the AI net using the
+ *   2. Play `count` MCTS games between the opponent net and the
+ *      (just-updated) imitator net, collecting AlphaZero-style training
+ *      examples for the opponent's side.
+ *   3. Run `gradientSteps` gradient steps on the opponent net using the
  *      enlarged replay buffer.
  * Folding all phases into one worker call avoids extra rounds of weight
  * / buffer serialization across the worker boundary.
@@ -41,9 +41,9 @@ export interface SelfPlaySearchConfig {
  * Messages sent FROM the main thread TO the worker.
  *
  * `start` kicks off a self-play batch sandwiched between gradient steps:
- *   - aiWeights:           serialized AI ChessNet bytes
+ *   - opponentWeights:     serialized opponent ChessNet bytes
  *   - imitatorWeights:     serialized imitator ChessNet bytes
- *   - replay:              serialized AI ReplayBuffer bytes (may be empty)
+ *   - replay:              serialized opponent ReplayBuffer bytes (may be empty)
  *   - imitatorReplay:      serialized imitator ReplayBuffer bytes (may be empty)
  *   - replayCapacity:      capacity for both replay buffers
  *   - search:              MCTS budget applied to both sides
@@ -55,10 +55,21 @@ export interface SelfPlaySearchConfig {
  * `stop` requests a graceful early stop. The worker finishes the current
  * game / step, serializes, and posts a 'done' message.
  */
+/**
+ * One scenario the gym should attempt. The worker parses `fen` to a
+ * `GameState` on receipt. `opponentColor` must equal the side to move
+ * at `fen` — `parseGymScenarios` enforces this on the way in.
+ */
+export interface GymScenarioRequest {
+  id: string;
+  fen: string;
+  opponentColor: 'w' | 'b';
+}
+
 export type SelfPlayRequest =
   | {
       kind: 'start';
-      aiWeights: Uint8Array;
+      opponentWeights: Uint8Array;
       imitatorWeights: Uint8Array;
       replay: Uint8Array;
       imitatorReplay: Uint8Array;
@@ -84,6 +95,30 @@ export type SelfPlayRequest =
        */
       startingFens?: string[];
     }
+  | {
+      // Endgame gym: loop through decided positions with the opponent
+      // fixed on the winning side. The worker grinds through scenarios
+      // in order, stops attempting each one as soon as the opponent
+      // converts (or maxGamesPerScenario is hit), and runs a final
+      // round of gradient steps on the new examples. Phases 1 / 2 of
+      // the regular self-play flow (imitator pre-training and
+      // color-alternating games) are skipped — the gym is exclusively
+      // about feeding winning-side policy targets to the opponent.
+      kind: 'start-gym';
+      opponentWeights: Uint8Array;
+      imitatorWeights: Uint8Array;
+      replay: Uint8Array;
+      imitatorReplay: Uint8Array;
+      replayCapacity: number;
+      search: SelfPlaySearchConfig;
+      scenarios: GymScenarioRequest[];
+      maxGamesPerScenario: number;
+      maxPlies: number;
+      gradientSteps: number;
+      gradientBatchSize: number;
+      temperaturePlies?: number;
+      temperature?: number;
+    }
   | { kind: 'stop' };
 
 /**
@@ -94,16 +129,16 @@ export type SelfPlayRequest =
  *           render a live board; pure background runs ignore it.
  * `game`  — one self-play game finished.
  * `step`  — periodic gradient-step progress report. `phase` distinguishes
- *           the imitator pre-train pass from the AI post-train pass.
+ *           the imitator pre-train pass from the opponent post-train pass.
  * `done`  — the whole batch finished (or stop was requested). Carries
- *           fresh AI + imitator weights and both replay buffers.
+ *           fresh opponent + imitator weights and both replay buffers.
  * `error` — something went wrong; the worker is now idle.
  */
 export type SelfPlayResponse =
   | {
       kind: 'ply';
       gameIndex: number;
-      aiColor: 'w' | 'b';
+      opponentColor: 'w' | 'b';
       plyIndex: number;
       fen: string;
       lastMove: string | null;
@@ -111,21 +146,37 @@ export type SelfPlayResponse =
   | {
       kind: 'game';
       index: number;
-      aiColor: 'w' | 'b';
-      aiResult: 'win' | 'loss' | 'draw';
+      opponentColor: 'w' | 'b';
+      opponentResult: 'win' | 'loss' | 'draw';
       plies: number;
+      /**
+       * When emitted by a gym run, identifies the scenario the game
+       * belongs to and the 0-based attempt number within it. Omitted
+       * by the regular `start` self-play flow.
+       */
+      scenarioIdx?: number;
+      gameInScenario?: number;
+    }
+  | {
+      kind: 'scenario-done';
+      scenarioIdx: number;
+      scenarioId: string;
+      converted: boolean;
+      gamesPlayed: number;
     }
   | {
       kind: 'step';
-      phase: 'imitator' | 'ai';
+      phase: 'imitator' | 'opponent';
       stepIndex: number;
       valueLoss: number;
       policyLoss: number;
+      /** Illegal-move penalty. 0 if the batch carried no legal-move masks. */
+      illegalLoss: number;
       totalLoss: number;
     }
   | {
       kind: 'done';
-      aiWeights: Uint8Array;
+      opponentWeights: Uint8Array;
       imitatorWeights: Uint8Array;
       replay: Uint8Array;
       imitatorReplay: Uint8Array;
@@ -136,5 +187,9 @@ export type SelfPlayResponse =
       examplesAdded: number;
       finalStep: number;
       imitatorFinalStep: number;
+      /** Gym-only: number of scenarios the opponent converted at least once. */
+      scenariosConverted?: number;
+      /** Gym-only: scenarios actually attempted before stop/end-of-list. */
+      scenariosAttempted?: number;
     }
   | { kind: 'error'; message: string };

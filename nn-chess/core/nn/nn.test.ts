@@ -233,6 +233,7 @@ describe('trainBatch', () => {
         features,
         valueTarget: 1,
         policyTarget: null, // value-only training
+        legalMoveIndices: null,
       };
 
       for (let i = 0; i < 50; i++) {
@@ -258,11 +259,12 @@ describe('trainBatch', () => {
       policyTarget[policyIndexFromUci('e2e4')] = 1;
 
       const result = await net.trainBatch([
-        { features, valueTarget: 1, policyTarget },
+        { features, valueTarget: 1, policyTarget, legalMoveIndices: null },
       ]);
 
       expect(result.valueLoss).toBeGreaterThanOrEqual(0);
       expect(result.policyLoss).toBeGreaterThanOrEqual(0);
+      expect(result.illegalLoss).toBeGreaterThanOrEqual(0);
       expect(result.totalLoss).toBeGreaterThanOrEqual(0);
     } finally {
       net.dispose();
@@ -289,7 +291,7 @@ describe('trainBatch', () => {
       const features = makeRandomFeatures(66);
 
       const maskedResult = await net.trainBatch([
-        { features, valueTarget: 0, policyTarget: null },
+        { features, valueTarget: 0, policyTarget: null, legalMoveIndices: null },
       ]);
 
       expect(maskedResult.policyLoss).toBe(0);
@@ -299,10 +301,58 @@ describe('trainBatch', () => {
       policyTarget[policyIndexFromUci('d2d4')] = 1;
 
       const unmaskedResult = await net.trainBatch([
-        { features, valueTarget: 0, policyTarget },
+        { features, valueTarget: 0, policyTarget, legalMoveIndices: null },
       ]);
 
       expect(unmaskedResult.policyLoss).toBeGreaterThan(0);
+    } finally {
+      net.dispose();
+    }
+  });
+
+  it('illegal-move penalty is zero when softmax mass sits only on legal indices', async () => {
+    // Construct an example whose "legal" set spans every policy index.
+    // The illegal-move penalty over that set is sum_over_illegal(softmax)
+    // = 0 by construction, no matter what the logits look like — so any
+    // nonzero illegalLoss here would mean the masking is wrong.
+    const net = ChessNet.create({ seed: 19 });
+    try {
+      const features = makeRandomFeatures(77);
+      const allLegal = Array.from({ length: POLICY_SIZE }, (_, i) => i);
+      const result = await net.trainBatch([
+        { features, valueTarget: 0, policyTarget: null, legalMoveIndices: allLegal },
+      ]);
+      expect(result.illegalLoss).toBeCloseTo(0, 5);
+    } finally {
+      net.dispose();
+    }
+  });
+
+  it('illegal-move penalty is positive at init when only a few moves are legal', async () => {
+    // Symmetric: only one move is legal, so a uniform-ish softmax (which
+    // is what a freshly-initialized net produces) puts ~1 of its mass on
+    // illegal indices. illegalLoss should be close to 1 at init.
+    const net = ChessNet.create({ seed: 20 });
+    try {
+      const features = makeRandomFeatures(88);
+      const result = await net.trainBatch([
+        { features, valueTarget: 0, policyTarget: null, legalMoveIndices: [0] },
+      ]);
+      expect(result.illegalLoss).toBeGreaterThan(0.9);
+      expect(result.illegalLoss).toBeLessThanOrEqual(1.0);
+    } finally {
+      net.dispose();
+    }
+  });
+
+  it('illegalLoss=0 when no example carries legalMoveIndices', async () => {
+    const net = ChessNet.create({ seed: 21 });
+    try {
+      const features = makeRandomFeatures(99);
+      const result = await net.trainBatch([
+        { features, valueTarget: 0, policyTarget: null, legalMoveIndices: null },
+      ]);
+      expect(result.illegalLoss).toBe(0);
     } finally {
       net.dispose();
     }

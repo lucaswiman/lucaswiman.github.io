@@ -1,5 +1,5 @@
-// Board ↔ tensor encoding. The agent's neural network sees boards
-// through this module and only through this module.
+// Board ↔ tensor encoding. The opponent's (and imitator's) neural
+// network sees boards through this module and only through this module.
 //
 // Design notes:
 // - We encode raw game state (which squares hold which pieces, side to

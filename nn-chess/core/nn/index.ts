@@ -1,4 +1,5 @@
-// Value + policy neural network for the chess agent.
+// Value + policy neural network for the chess opponent (and the
+// player-imitator, which uses the same architecture).
 //
 // Design choices documented here:
 //
@@ -16,7 +17,7 @@
 //
 // Policy representation: raw logits over 64×64 = 4096 from-square × to-square
 //   - Cheap, AlphaZero-style move encoding.
-//   - The agent module is responsible for masking illegal moves before
+//   - The opponent module is responsible for masking illegal moves before
 //     computing softmax — we return raw logits here.
 //   - TODO: extend to 64×64×3 = 12288 to cover underpromotion piece choices
 //     (queen/rook/bishop). Currently all 5-char UCI promotions map to the
@@ -99,6 +100,18 @@ export interface TrainingExample {
    * policy loss for this example (draws, or positions where the loser moved).
    */
   policyTarget: Float32Array | null;
+  /**
+   * Sorted policy indices that were legal at this position, or null
+   * when legality info wasn't captured (older replay buffer entries
+   * from before this field existed). When present, the illegal-move
+   * loss term penalizes softmax mass on any index NOT in this list;
+   * when null, the example contributes nothing to that term.
+   *
+   * Stored as a sorted index list rather than a dense mask so the
+   * replay buffer payload stays small — ~30 indices per example
+   * vs. a 4096-wide Float32Array.
+   */
+  legalMoveIndices: number[] | null;
 }
 
 export interface Prediction {
@@ -114,8 +127,25 @@ export interface Prediction {
 export interface TrainResult {
   valueLoss: number;
   policyLoss: number;
+  /**
+   * Illegal-move penalty: mean over examples with `legalMoveIndices` of
+   * the total softmax probability the network put on illegal moves.
+   * 0 when there are no examples with legality info in the batch.
+   */
+  illegalLoss: number;
   totalLoss: number;
 }
+
+/**
+ * Weight on the illegal-move penalty in the total loss. Tuned just
+ * large enough to push softmax mass off illegal moves without
+ * overwhelming the policy-target cross-entropy. The penalty's
+ * untrained baseline is ≈ (POLICY_SIZE − legal) / POLICY_SIZE ≈ 0.99,
+ * so 1.0 × that adds ≈ 1.0 to the loss at init — comparable to a
+ * uniformly-distributed cross-entropy and well below the L2 term once
+ * the net warms up.
+ */
+export const ILLEGAL_LOSS_WEIGHT = 1.0;
 
 export interface ChessNetOptions {
   /**
@@ -254,9 +284,12 @@ export class ChessNet {
   predictBatch(featuresBatch: Float32Array[]): Prediction[] {
     if (featuresBatch.length === 0) return [];
 
-    return tf.tidy(() => {
-      const batchSize = featuresBatch.length;
-      // Stack feature vectors into a single [batchSize, FEATURE_COUNT] tensor.
+    const batchSize = featuresBatch.length;
+    // The tf.tidy return type must be a TensorContainer, which excludes
+    // arbitrary structs like `Prediction[]`. We pull the raw Float32 data
+    // out inside the tidy block (so the intermediate tensors get disposed)
+    // and rebuild Predictions on the JS side after.
+    const { values, policies } = tf.tidy(() => {
       const combined = new Float32Array(batchSize * FEATURE_COUNT);
       for (let i = 0; i < batchSize; i++) {
         combined.set(featuresBatch[i], i * FEATURE_COUNT);
@@ -266,19 +299,20 @@ export class ChessNet {
         tf.Tensor,
         tf.Tensor,
       ];
-
-      const values = valueTensor.dataSync() as Float32Array;
-      const policies = policyTensor.dataSync() as Float32Array;
-
-      const results: Prediction[] = [];
-      for (let i = 0; i < batchSize; i++) {
-        results.push({
-          value: values[i],
-          policy: policies.slice(i * POLICY_SIZE, (i + 1) * POLICY_SIZE) as Float32Array,
-        });
-      }
-      return results;
+      return {
+        values: valueTensor.dataSync().slice() as Float32Array,
+        policies: policyTensor.dataSync().slice() as Float32Array,
+      };
     });
+
+    const results: Prediction[] = new Array(batchSize);
+    for (let i = 0; i < batchSize; i++) {
+      results[i] = {
+        value: values[i],
+        policy: policies.slice(i * POLICY_SIZE, (i + 1) * POLICY_SIZE) as Float32Array,
+      };
+    }
+    return results;
   }
 
   /**
@@ -298,7 +332,7 @@ export class ChessNet {
    */
   async trainBatch(examples: TrainingExample[]): Promise<TrainResult> {
     if (examples.length === 0) {
-      return { valueLoss: 0, policyLoss: 0, totalLoss: 0 };
+      return { valueLoss: 0, policyLoss: 0, illegalLoss: 0, totalLoss: 0 };
     }
 
     const n = examples.length;
@@ -311,6 +345,15 @@ export class ChessNet {
     const policyTargetData = new Float32Array(n * POLICY_SIZE);
     const maskData = new Float32Array(n); // 1 where policyTarget != null, else 0
 
+    // Legal-move mask: 1 on legal indices, 0 elsewhere. Per-example
+    // `legalHasMask` flag is 1 when the example carried `legalMoveIndices`
+    // and 0 otherwise (older replay-buffer entries pre-dating the field).
+    // Building the dense mask client-side keeps the tensor op a single
+    // multiply rather than a scatter; ~4 KB per example which is fine
+    // for our batch sizes (≤ 64).
+    const legalMaskData = new Float32Array(n * POLICY_SIZE);
+    const legalHasMaskData = new Float32Array(n);
+
     for (let i = 0; i < n; i++) {
       featureData.set(examples[i].features, i * FEATURE_COUNT);
       valueTargetData[i] = examples[i].valueTarget;
@@ -318,17 +361,30 @@ export class ChessNet {
         policyTargetData.set(examples[i].policyTarget!, i * POLICY_SIZE);
         maskData[i] = 1;
       }
+      const lmi = examples[i].legalMoveIndices;
+      if (lmi !== null && lmi.length > 0) {
+        const base = i * POLICY_SIZE;
+        for (const idx of lmi) legalMaskData[base + idx] = 1;
+        legalHasMaskData[i] = 1;
+      }
     }
 
     let valueLoss = 0;
     let policyLoss = 0;
+    let illegalLoss = 0;
 
-    const { value: totalLossValue } = this._optimizer.minimize(
+    // `minimize` can return `null` when `returnCost` is false; we ask for
+    // the cost (`true` below) so it's a Scalar in practice, but the type
+    // signature still admits null. Coalesce to a typed handle so we can
+    // safely `.dispose()` on it.
+    const totalLossValue = this._optimizer.minimize(
       () => tf.tidy(() => {
         const features = tf.tensor2d(featureData, [n, FEATURE_COUNT]);
         const valueTargets = tf.tensor2d(valueTargetData, [n, 1]);
         const policyTargets = tf.tensor2d(policyTargetData, [n, POLICY_SIZE]);
         const mask = tf.tensor1d(maskData); // [n]
+        const legalMask = tf.tensor2d(legalMaskData, [n, POLICY_SIZE]);
+        const legalHasMask = tf.tensor1d(legalHasMaskData); // [n]
 
         const [valuePred, policyLogits] = this._model.apply(features, {
           training: true,
@@ -337,17 +393,39 @@ export class ChessNet {
         // MSE value loss.
         const vLoss = tf.losses.meanSquaredError(valueTargets, valuePred) as tf.Scalar;
 
-        // Masked softmax cross-entropy policy loss.
-        // crossEntropy shape: [n] (one scalar per example).
+        // Softmax probabilities — reused for the policy CE (via
+        // logSoftmax) and the illegal-move penalty (via softmax).
         const logSoftmax = tf.logSoftmax(policyLogits); // [n, POLICY_SIZE]
-        // Sum of (target * log_softmax) per example → [n].
+        const softmax = tf.softmax(policyLogits);       // [n, POLICY_SIZE]
+
+        // Masked softmax cross-entropy policy loss.
         const perExampleCE = tf.neg(
           tf.sum(tf.mul(policyTargets, logSoftmax), 1),
         ); // [n]
-        // Multiply by mask and take the mean over the batch.
         const maskedCE = tf.mul(perExampleCE, mask); // [n]
         const numMasked = tf.maximum(tf.sum(mask), tf.scalar(1)); // avoid /0
         const pLoss = tf.div(tf.sum(maskedCE), numMasked) as tf.Scalar;
+
+        // Illegal-move penalty.
+        //
+        // For every example with a legal-move mask, sum the softmax
+        // probabilities on indices flagged ILLEGAL (mask = 0). When the
+        // network has learned to put all of its mass on legal moves this
+        // term is exactly 0; when the network is initialized uniformly
+        // it is ≈ (POLICY_SIZE − legal) / POLICY_SIZE.
+        //
+        // We average over the number of examples that supplied legality
+        // info — examples without it (older replay entries) contribute
+        // zero to numerator and zero to denominator, so they're a true
+        // no-op rather than silently dragging the loss toward zero.
+        const illegalMass = tf.sum(
+          tf.mul(softmax, tf.sub(tf.scalar(1), legalMask)),
+          1,
+        ); // [n]
+        const maskedIllegal = tf.mul(illegalMass, legalHasMask); // [n]
+        const numLegalMasked = tf.maximum(tf.sum(legalHasMask), tf.scalar(1));
+        const iLoss = tf.div(tf.sum(maskedIllegal), numLegalMasked) as tf.Scalar;
+        const iLossWeighted = tf.mul(tf.scalar(ILLEGAL_LOSS_WEIGHT), iLoss) as tf.Scalar;
 
         // L2 regularization: sum kernel norms manually so the optimizer sees
         // them in the gradient path (tfjs model regularization is only
@@ -359,24 +437,28 @@ export class ChessNet {
           }
         }
 
-        const totalLoss = tf.add(tf.add(vLoss, pLoss), l2Sum) as tf.Scalar;
+        const totalLoss = tf.add(
+          tf.add(tf.add(vLoss, pLoss), iLossWeighted),
+          l2Sum,
+        ) as tf.Scalar;
 
         // Capture scalar values for return (inside tidy, so we read before
         // tidy disposes).
         valueLoss = (vLoss.dataSync() as Float32Array)[0];
         policyLoss = (pLoss.dataSync() as Float32Array)[0];
+        illegalLoss = (iLoss.dataSync() as Float32Array)[0];
 
         return totalLoss;
       }),
       true, // returnCost
     );
 
-    const totalLoss = valueLoss + policyLoss;
+    const totalLoss = valueLoss + policyLoss + ILLEGAL_LOSS_WEIGHT * illegalLoss;
 
     // Dispose the returned cost tensor.
     if (totalLossValue) totalLossValue.dispose();
 
-    return { valueLoss, policyLoss, totalLoss };
+    return { valueLoss, policyLoss, illegalLoss, totalLoss };
   }
 
   // ── Serialization ─────────────────────────────────────────────────────────

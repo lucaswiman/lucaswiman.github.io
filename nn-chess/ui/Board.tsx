@@ -3,7 +3,7 @@
  *
  * Owns game state via the `nn-chess/core/rules` API (never imports chess.js
  * directly). Renders a `react-chessboard` `<Chessboard />` and exposes
- * callback seams the future agent integration will wire into.
+ * callback seams the future opponent integration will wire into.
  *
  * Controlled vs uncontrolled mode
  * ────────────────────────────────
@@ -17,7 +17,7 @@
  * before. This preserves the standalone "play yourself" demo.
  *
  * The `interactive` prop (default `true`) disables drag-drop when `false`.
- * `Game.tsx` sets this to `false` while the agent is thinking.
+ * `Game.tsx` sets this to `false` while the opponent is thinking.
  */
 
 import { useState, useCallback } from 'react';
@@ -47,7 +47,7 @@ export interface BoardProps {
 
   /**
    * When false, drag-drop is disabled regardless of the game state.
-   * Defaults to true. Set to false while the agent is thinking.
+   * Defaults to true. Set to false while the opponent is thinking.
    */
   interactive?: boolean;
 
@@ -60,7 +60,7 @@ export interface BoardProps {
 
   /**
    * Called after every successful move with the resulting state and the
-   * UCI move string. The future Agent integration will use this to
+   * UCI move string. The future Opponent integration will use this to
    * trigger NN-driven replies.
    */
   onMove?: (state: GameState, move: Move) => void;

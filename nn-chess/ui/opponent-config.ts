@@ -1,12 +1,12 @@
-// Shared agent wiring for the human-play page and the Stockfish sparring
-// page. Both routes save/load to the same IndexedDB namespace so weights
-// persist across pages — diverging the config here would silently shard
-// the agent in two.
+// Shared opponent wiring for the human-play page and the Stockfish
+// sparring page. Both routes save/load to the same IndexedDB namespace
+// so weights persist across pages — diverging the config here would
+// silently shard the opponent in two.
 //
-// As of the two-network refactor the project loads BOTH an `Agent`
-// (the AI we play against) and a `PlayerImitator` (a second net the
-// AI uses as a self-play opponent). Their states are stored under
-// disjoint key prefixes inside the same `BlobStorage`.
+// As of the two-network refactor the project loads BOTH an `Opponent`
+// (the network we play against) and a `PlayerImitator` (a second net the
+// opponent uses as a self-play stand-in for the user). Their states are
+// stored under disjoint key prefixes inside the same `BlobStorage`.
 //
 // Storage backend: IndexedDB. Earlier builds used localStorage, which
 // caps at ~5–10 MB per origin and produces QuotaExceededError once the
@@ -16,10 +16,10 @@
 
 import { ChessNet } from '../core/nn/index.js';
 import {
-  loadAgent,
-  type Agent,
-  type AgentConfig,
-} from '../core/agent/index.js';
+  loadOpponent,
+  type Opponent,
+  type OpponentConfig,
+} from '../core/opponent/index.js';
 import {
   loadPlayerImitator,
   type PlayerImitator,
@@ -33,15 +33,15 @@ export const STORAGE_PREFIX = 'nn-chess-v1/';
 export const REPLAY_CAPACITY = 10_000;
 
 // simulations=64 keeps a move under ~5s on a CPU; temperature=0 is greedy.
-export const AGENT_CONFIG: AgentConfig = {
+export const OPPONENT_CONFIG: OpponentConfig = {
   simulations: 64,
   cPuct: 1.5,
   temperature: 0,
 };
 
 /**
- * MCTS hyperparameters used during self-play between the AI and the
- * imitator. The simulation count is sourced from the in-game MCTS
+ * MCTS hyperparameters used during self-play between the opponent and
+ * the imitator. The simulation count is sourced from the in-game MCTS
  * sims slider at call sites — `simulations` here is only a fallback
  * default for any code path that doesn't have access to the slider.
  *
@@ -79,7 +79,7 @@ export const SELFPLAY_TEMPERATURE_PLIES = 30;
 /** Visit-count sampling temperature. 1.0 = raw visit counts (AlphaZero). */
 export const SELFPLAY_TEMPERATURE = 1.0;
 
-/** Gradient steps to run on the AI net immediately after a self-play batch. */
+/** Gradient steps to run on the opponent net immediately after a self-play batch. */
 export const SELFPLAY_GRADIENT_STEPS = 10;
 
 /** Minibatch size for those post-batch gradient steps. */
@@ -88,7 +88,7 @@ export const SELFPLAY_GRADIENT_BATCH = 32;
 /** Storage key for the "auto-run self-play after each game" user preference. */
 export const AUTO_SELFPLAY_PREF_KEY = 'ui/auto-selfplay';
 
-export function createAgentStorage(): BlobStorage {
+export function createOpponentStorage(): BlobStorage {
   return createIndexedDBAdapter({ prefix: STORAGE_PREFIX });
 }
 
@@ -105,19 +105,19 @@ async function runMigrationIfNeeded(target: BlobStorage): Promise<void> {
       console.info(`nn-chess: migrated ${result.migrated} key(s) from localStorage to IndexedDB`);
     }
   } catch (err) {
-    // Migration failure is non-fatal: a fresh agent simply starts empty.
+    // Migration failure is non-fatal: a fresh opponent simply starts empty.
     console.warn('nn-chess: migration from localStorage failed', err);
   }
 }
 
-export function loadAgentFromStorage(storage: BlobStorage): Promise<Agent> {
+export function loadOpponentFromStorage(storage: BlobStorage): Promise<Opponent> {
   if (migrationPromise === null) {
     migrationPromise = runMigrationIfNeeded(storage);
   }
   return migrationPromise.then(() =>
-    loadAgent(storage, {
+    loadOpponent(storage, {
       net: ChessNet.create({ seed: Date.now() }),
-      config: AGENT_CONFIG,
+      config: OPPONENT_CONFIG,
       replayCapacity: REPLAY_CAPACITY,
     }),
   );
@@ -132,8 +132,8 @@ export function loadPlayerImitatorFromStorage(
   return migrationPromise.then(() =>
     loadPlayerImitator(storage, {
       // Seed offset so the imitator is initialized differently from the
-      // AI; otherwise two identically-initialized nets give MCTS the
-      // same priors and self-play would converge on identical lines.
+      // opponent; otherwise two identically-initialized nets give MCTS
+      // the same priors and self-play would converge on identical lines.
       net: ChessNet.create({ seed: Date.now() ^ 0x5A5A5A5A }),
       replayCapacity: REPLAY_CAPACITY,
     }),

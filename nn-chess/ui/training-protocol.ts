@@ -12,8 +12,8 @@
  * `start` kicks off a training run on BOTH networks. Each net trains
  * against its own replay buffer with the same loss / batch-size / step
  * budget. The imitator is skipped silently when its buffer is too small.
- *   - weights:           serialized AI ChessNet bytes
- *   - replay:            serialized AI ReplayBuffer bytes
+ *   - weights:           serialized opponent ChessNet bytes
+ *   - replay:            serialized opponent ReplayBuffer bytes
  *   - imitatorWeights:   serialized imitator ChessNet bytes
  *   - imitatorReplay:    serialized imitator ReplayBuffer bytes
  *   - replayCapacity:    capacity for both replay buffers
@@ -42,7 +42,7 @@ export type TrainRequest =
  * Messages sent FROM the worker TO the main thread.
  *
  * `step`  — periodic progress report during training. `phase` distinguishes
- *           the AI pass from the imitator pass.
+ *           the opponent pass from the imitator pass.
  * `done`  — training has finished (budget exhausted or stop requested).
  *            Carries fresh serialized weights and replay buffers for
  *            both nets.
@@ -51,10 +51,12 @@ export type TrainRequest =
 export type TrainResponse =
   | {
       kind: 'step';
-      phase: 'ai' | 'imitator';
+      phase: 'opponent' | 'imitator';
       stepIndex: number;
       valueLoss: number;
       policyLoss: number;
+      /** Illegal-move penalty (`ChessNet.trainBatch` → `illegalLoss`). 0 when the batch carried no legal-move masks. */
+      illegalLoss: number;
       totalLoss: number;
     }
   | {

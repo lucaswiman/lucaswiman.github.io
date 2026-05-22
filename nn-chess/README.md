@@ -4,11 +4,11 @@
 > but shittier — because it's trained off your moves."**
 
 A browser-based chess game that learns to play **only from games tied
-to the user** — either games the user plays directly against the agent,
-or self-play games against a second network that imitates the user. No
-opening books, no piece-square tables, no material counting, no
-hand-tuned evaluation. The only chess knowledge baked into the agent
-is:
+to the user** — either games the user plays directly against the
+opponent network, or self-play games against a second network that
+imitates the user. No opening books, no piece-square tables, no
+material counting, no hand-tuned evaluation. The only chess knowledge
+baked into the opponent is:
 
 1. The rules of chess (legal moves, check, checkmate, stalemate, draw
    conditions).
@@ -23,10 +23,10 @@ the user's own moves.
 
 The project trains **two** networks side by side:
 
-- **AI network (`agent`)** — the one the user plays against. Trained
-  AlphaZero-style on terminal outcomes: positions of the winning side
-  carry a one-hot policy target, positions of the losing side and
-  draws carry only a value target.
+- **Opponent network (`opponent`)** — the one the user plays against.
+  Trained AlphaZero-style on terminal outcomes: positions of the
+  winning side carry a one-hot policy target, positions of the losing
+  side and draws carry only a value target.
 - **Player-imitator network (`imitator`)** — a behaviour-cloning model
   of the user. Trained supervised on every move the user plays,
   regardless of whether the user won, drew, or lost.
@@ -35,25 +35,25 @@ After each real game two things happen automatically:
 
 1. The imitator records the user's moves and trains toward "predict
    what this user would play here."
-2. The user can run a batch of MCTS self-play games between the AI and
-   the imitator; the AI trains on the outcomes the same way it trains
-   on real games.
+2. The user can run a batch of MCTS self-play games between the
+   opponent and the imitator; the opponent trains on the outcomes the
+   same way it trains on real games.
 
 This is a deliberate departure from the project's original "no
 self-play, ever" rule. The original framing was "what does a tiny net
 look like with one human's worth of data" — but with one human's data,
-the AI never accumulates enough decisive games to learn anything
-beyond move legality. Routing the AI's self-play through a
+the opponent never accumulates enough decisive games to learn anything
+beyond move legality. Routing the opponent's self-play through a
 user-imitator gives a tractable data-volume boost while keeping the
 learning signal tied to the user: the imitator only knows what the
-user has shown it, so the AI is still effectively training against
-patterns the user has produced. Pure self-play between two copies of
-the AI (i.e. AlphaZero-style bootstrapping without a user-in-the-loop)
-remains out of scope.
+user has shown it, so the opponent is still effectively training
+against patterns the user has produced. Pure self-play between two
+copies of the opponent (i.e. AlphaZero-style bootstrapping without a
+user-in-the-loop) remains out of scope.
 
-Down the road we will also let the user point the agent at a known-
-strong opponent (e.g. Stockfish via a worker) and watch it learn from
-those games.
+Down the road we will also let the user point the opponent at a known-
+strong external player (e.g. Stockfish via a worker) and watch it
+learn from those games.
 
 The app lives at the route **`/nn-chess`** on this site, is built as part
 of the normal Astro / GitHub Actions pipeline, and persists trained
@@ -71,7 +71,7 @@ layout and module boundaries are chosen so that move is mechanical.
    evaluation. Comments should explain *why*, names should explain
    *what*.
 2. **Honest learning signal.** Absolutely no heuristics beyond
-   "checkmate is terminal and good/bad." The agent has to be bad at
+   "checkmate is terminal and good/bad." The opponent has to be bad at
    first and that's the point. Resist every temptation to nudge it.
 3. **Strong factoring.** A pure, framework-agnostic core (rules + MCTS +
    NN + training loop) with no DOM, no React, no `localStorage`
@@ -99,7 +99,7 @@ nn-chess/
 ├── README.md           ← this file
 ├── core/               ← pure TS, no DOM, no framework. Heavily unit-tested.
 │   ├── rules/          ← thin wrapper over `chess.js` exposing the
-│   │                     subset of the rules API the agent + UI need.
+│   │                     subset of the rules API the opponent + UI need.
 │   ├── encoding/       ← board ↔ tensor encoding (planes per piece type,
 │   │                     side to move, castling rights, etc.)
 │   ├── nn/             ← value+policy network. Pluggable backend
@@ -115,14 +115,14 @@ nn-chess/
 │   │                     opaque blobs keyed by string). Adapters live
 │   │                     outside `core/`.
 │   ├── imitator/       ← player-imitator network (behaviour cloning
-│   │                     of the user). Same shape as the agent's NN,
-│   │                     trained on every user move regardless of
+│   │                     of the user). Same shape as the opponent's
+│   │                     NN, trained on every user move regardless of
 │   │                     outcome.
 │   ├── selfplay/       ← MCTS-vs-MCTS game runner used to pit the
-│   │                     agent against the imitator and harvest
+│   │                     opponent against the imitator and harvest
 │   │                     AlphaZero-style training examples.
-│   └── agent/          ← glues MCTS + NN + (optional) training into a
-│                         single "Agent" object the UI talks to.
+│   └── opponent/       ← glues MCTS + NN + (optional) training into a
+│                         single "Opponent" object the UI talks to.
 ├── adapters/           ← non-core, environment-specific glue.
 │   ├── storage-localstorage.ts
 │   ├── storage-memory.ts        ← used by tests
@@ -144,10 +144,10 @@ nn-chess/
   adapter; the core just sees `get`/`put`. Swapping to IndexedDB or
   adding "export weights to a file" is one new adapter, no core
   changes.
-- **The agent owns the MCTS+NN loop**, not the UI. The UI calls
-  `agent.selectMove(state)` and `agent.recordGameResult(history,
-  outcome)`. The same agent code drives human-play in the browser
-  and (later) play against an external opponent like Stockfish; both
+- **The opponent owns the MCTS+NN loop**, not the UI. The UI calls
+  `opponent.selectMove(state)` and `opponent.recordGameResult(history,
+  outcome)`. The same opponent code drives human-play in the browser
+  and (later) play against an external player like Stockfish; both
   are sources of *real* games, not self-play.
 
 ## Libraries we intend to use
@@ -171,18 +171,18 @@ Final choices made when implementing; this is the current shortlist.
 There are two learners and they take training data from different
 sources.
 
-### AI network
+### Opponent network
 
-The AI is trained AlphaZero-style on the outcomes of finished games.
-Two kinds of games feed its replay buffer:
+The opponent is trained AlphaZero-style on the outcomes of finished
+games. Two kinds of games feed its replay buffer:
 
-- **Real games** — the user plays the AI; every position from that
-  game becomes a training example.
-- **Self-play games** — the AI plays the player-imitator under MCTS;
-  positions from the AI's side of those games become training
-  examples too.
+- **Real games** — the user plays the opponent; every position from
+  that game becomes a training example.
+- **Self-play games** — the opponent plays the player-imitator under
+  MCTS; positions from the opponent's side of those games become
+  training examples too.
 
-For each AI training example:
+For each opponent training example:
 
 **Value target** is the eventual game outcome from the side-to-move's
 perspective:
@@ -204,8 +204,8 @@ The imitator is a pure behaviour-cloning model of the user. After
 each real game, **every** user move from that game becomes a positive
 example for the imitator's policy head, regardless of whether the
 user won, drew, or lost. The imitator's value head sees the same
-outcome-from-side-to-move signal the AI uses, so it can act as a
-serviceable MCTS leaf evaluator during self-play.
+outcome-from-side-to-move signal the opponent uses, so it can act as
+a serviceable MCTS leaf evaluator during self-play.
 
 The imitator does **not** train on self-play games. Its only signal
 is the user's own moves.
@@ -222,10 +222,11 @@ games).
 ### Why this is still not pure bootstrapping
 
 The imitator only ever sees moves the user has actually played, so
-the AI's self-play data is downstream of the user's own play style.
-The AI is not improving against an arbitrary strong opponent — it is
-improving against a learned proxy for *this user*. Strength is bounded
-by what the imitator can squeeze out of the user's moves.
+the opponent's self-play data is downstream of the user's own play
+style. The opponent is not improving against an arbitrary strong
+player — it is improving against a learned proxy for *this user*.
+Strength is bounded by what the imitator can squeeze out of the user's
+moves.
 
 Because the only ground-truth signal is terminal and the data volume
 is tiny, **early play will be terrible** and that is expected. Resist
@@ -245,17 +246,17 @@ aware initialization.
 4. **MCTS.** PUCT search over the `GameState` abstraction with the
    NN providing priors and value. Tests against trivial endgames
    (e.g. K+Q vs K mate-in-1) where the right move is unambiguous.
-5. **Agent + UI.** React board, "new game" / "resign" controls,
+5. **Opponent + UI.** React board, "new game" / "resign" controls,
    move history, status. Persist weights via the `localStorage`
    adapter.
-6. **Training loop.** Replay buffer fed by completed user-vs-agent
+6. **Training loop.** Replay buffer fed by completed user-vs-opponent
    games, background gradient steps in a Web Worker so training
    doesn't block the UI, controls for "train for N steps on the
    games you've already played."
 7. **Interpretability.** Weight + activation viewer; per-move
    visualization of MCTS priors and value head output.
-8. **Stockfish sparring.** Optional opponent via `stockfish.js` in
-   a Worker so we can watch the agent improve against a known
+8. **Stockfish sparring.** Optional external player via `stockfish.js`
+   in a Worker so we can watch the opponent improve against a known
    yardstick.
 9. **Endgame curriculum.** Setup picker that starts a game from a
    curated endgame FEN — hand-written textbook mates (KQ-K, KR-K,
@@ -272,12 +273,12 @@ aware initialization.
 
 ## Things we will explicitly *not* do without a discussion
 
-- Add any chess heuristic to the agent's evaluation, MCTS prior, or
-  reward (including "tiny" ones like material count as a tiebreak).
+- Add any chess heuristic to the opponent's evaluation, MCTS prior,
+  or reward (including "tiny" ones like material count as a tiebreak).
 - Add a self-play loop that is *not* gated by the player-imitator —
-  e.g. AlphaZero-style "two copies of the AI play each other forever"
-  is still out of scope. The imitator-mediated self-play is the only
-  approved kind because it keeps the data tethered to the user.
+  e.g. AlphaZero-style "two copies of the opponent play each other
+  forever" is still out of scope. The imitator-mediated self-play is
+  the only approved kind because it keeps the data tethered to the user.
 - Couple `core/` to `window`, `localStorage`, React, or Astro.
 - Skip tests on `core/` modules.
 - Inline trained weights into the repo. Weights live in the user's

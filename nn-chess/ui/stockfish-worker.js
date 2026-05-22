@@ -16,8 +16,8 @@
  * ~7MB) is chosen because:
  *  1. No SharedArrayBuffer / COOP/COEP headers required (single-threaded).
  *  2. ~7MB vs ~110MB for the full engine — acceptable load time.
- *  3. Still far stronger than the nn-chess agent; the "skill level" option
- *     is used to deliberately weaken it so the agent has a chance.
+ *  3. Still far stronger than the nn-chess opponent; the "skill level"
+ *     option is used to deliberately weaken it so the opponent has a chance.
  *
  * Protocol:
  *   Main thread → worker: postMessage(uciCommandString)

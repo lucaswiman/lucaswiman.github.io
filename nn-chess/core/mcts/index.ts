@@ -30,7 +30,7 @@ export interface Policy {
   /**
    * Evaluate a non-terminal position.
    * - `priors`: a probability distribution over the legal moves in `state`
-   *   (sums to ~1 after the agent has masked illegals and renormalized).
+   *   (sums to ~1 after the caller has masked illegals and renormalized).
    * - `value`: predicted outcome from `state`'s side-to-move's perspective,
    *   in [-1, 1].
    */

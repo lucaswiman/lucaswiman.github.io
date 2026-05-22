@@ -8,7 +8,7 @@ import * as tf from '@tensorflow/tfjs';
 import { createPlayerImitator, IMITATOR_STORAGE_KEYS } from './index.js';
 import { createReplayBuffer } from '../training/index.js';
 import { createMemoryStorage } from '../../adapters/storage-memory.js';
-import { buildImitationExamples, type GameMoveRecord } from '../agent/index.js';
+import { buildImitationExamples, type GameMoveRecord } from '../opponent/index.js';
 import {
   ChessNet,
   POLICY_SIZE,
@@ -31,7 +31,7 @@ function stubNet(): ChessNet & {
     predict() { throw new Error('predict not used in these tests'); },
     async trainBatch(examples: TrainingExample[]): Promise<TrainResult> {
       trainCalls.push(examples);
-      return { valueLoss: 0.1, policyLoss: 0.2, totalLoss: 0.3 };
+      return { valueLoss: 0.1, policyLoss: 0.2, illegalLoss: 0, totalLoss: 0.3 };
     },
     async serialize(): Promise<Uint8Array> {
       serializeCalls++;
@@ -51,6 +51,7 @@ function moveRecord(side: 'w' | 'b', uci: string): GameMoveRecord {
     features: new Float32Array(FEATURE_COUNT),
     move: uci,
     sideToMove: side,
+    legalMoveIndices: [policyIndexFromUci(uci)],
   };
 }
 

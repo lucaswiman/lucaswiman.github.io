@@ -1,15 +1,16 @@
 // BlobStorage adapter backed by IndexedDB.
 //
-// IndexedDB is the right backend for the agent's replay buffer: per-origin
-// quotas are typically hundreds of MB to multi-GB, values are stored as
-// native binary (no base64), and writes are async so they don't block the
-// main thread the way large localStorage strings do.
+// IndexedDB is the right backend for the opponent's replay buffer:
+// per-origin quotas are typically hundreds of MB to multi-GB, values
+// are stored as native binary (no base64), and writes are async so they
+// don't block the main thread the way large localStorage strings do.
 //
-// The adapter opens a single object store keyed by string with Uint8Array
-// values. Keys are namespaced by a configurable prefix so the agent does
-// not collide with anything else stored in the same database. The DB is
-// opened lazily on first use so importing this module in Node (for the
-// training harness, or for SSR) does not blow up.
+// The adapter opens a single object store keyed by string with
+// Uint8Array values. Keys are namespaced by a configurable prefix so
+// the opponent does not collide with anything else stored in the same
+// database. The DB is opened lazily on first use so importing this
+// module in Node (for the training harness, or for SSR) does not blow
+// up.
 
 import type { BlobStorage } from '../core/storage/index.js';
 

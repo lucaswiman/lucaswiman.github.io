@@ -1,5 +1,5 @@
-// NN calls (predict, getActivations) are memoized on a (stateKey, agentVersion)
-// pair so unrelated re-renders (e.g. agentThinking toggling) don't reinvoke
+// NN calls (predict, getActivations) are memoized on a (stateKey, opponentVersion)
+// pair so unrelated re-renders (e.g. opponentThinking toggling) don't reinvoke
 // the network. stateKey is toFen(state) because GameState wraps a mutable
 // chess.js instance.
 //
@@ -7,7 +7,7 @@
 // alone has 128 × 4096 = ~524k weights, which is useless and slow to render.
 
 import { useMemo, useState, useCallback } from 'react';
-import { softmax, type Agent } from '../core/agent/index.js';
+import { softmax, type Opponent } from '../core/opponent/index.js';
 import type { SearchResult } from '../core/mcts/index.js';
 import type { GameState } from '../core/rules/index.js';
 import { legalMoves, sideToMove, toFen } from '../core/rules/index.js';
@@ -15,10 +15,10 @@ import { encodeState } from '../core/encoding/index.js';
 import { policyIndexFromUci } from '../core/nn/index.js';
 
 export interface InspectorPanelProps {
-  agent: Agent | null;
+  opponent: Opponent | null;
   state: GameState;
   lastSearch: SearchResult | null;
-  agentVersion: number;
+  opponentVersion: number;
 }
 
 function arrayStats(arr: Float32Array): { min: number; max: number; mean: number } {
@@ -201,42 +201,42 @@ interface WeightStats {
 }
 
 export function InspectorPanel({
-  agent,
+  opponent,
   state,
   lastSearch,
-  agentVersion,
+  opponentVersion,
 }: InspectorPanelProps) {
   const [weightStats, setWeightStats] = useState<WeightStats | null>(null);
   const [loadingWeights, setLoadingWeights] = useState(false);
 
   const stateKey = useMemo(() => {
-    if (!agent) return '';
-    return `${toFen(state)}@v${agentVersion}`;
-  }, [agent, state, agentVersion]);
+    if (!opponent) return '';
+    return `${toFen(state)}@v${opponentVersion}`;
+  }, [opponent, state, opponentVersion]);
 
-  // stateKey already encodes agent (via agentVersion) and state, so the
+  // stateKey already encodes opponent (via opponentVersion) and state, so the
   // exhaustive-deps lint is intentionally suppressed on the NN-call memos.
   const prediction = useMemo(() => {
-    if (!agent) return null;
+    if (!opponent) return null;
     try {
-      return agent.net.predict(encodeState(state));
+      return opponent.net.predict(encodeState(state));
     } catch {
       return null;
     }
   }, [stateKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const activations = useMemo(() => {
-    if (!agent) return null;
+    if (!opponent) return null;
     try {
-      const names = agent.net.layerNames();
-      return agent.net.getActivations(encodeState(state), names);
+      const names = opponent.net.layerNames();
+      return opponent.net.getActivations(encodeState(state), names);
     } catch {
       return null;
     }
   }, [stateKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const topPolicyMoves = useMemo(() => {
-    if (!prediction || !agent) return [];
+    if (!prediction || !opponent) return [];
     const legal = legalMoves(state);
     if (legal.length === 0) return [];
 
@@ -265,10 +265,10 @@ export function InspectorPanel({
 
 
   const handleLoadWeights = useCallback(async () => {
-    if (!agent || loadingWeights) return;
+    if (!opponent || loadingWeights) return;
     setLoadingWeights(true);
     try {
-      const bytes = await agent.net.serialize();
+      const bytes = await opponent.net.serialize();
       // Parse the serialized blob to extract per-layer weight tensors.
       // Wire format: 4-byte LE uint32 header-length, header JSON, weight bytes.
       // See nn/index.ts for the full spec.
@@ -301,7 +301,7 @@ export function InspectorPanel({
     } finally {
       setLoadingWeights(false);
     }
-  }, [agent, loadingWeights]);
+  }, [opponent, loadingWeights]);
 
 
   const side = sideToMove(state);
@@ -323,8 +323,8 @@ export function InspectorPanel({
         Inspector (interpretability)
       </summary>
 
-      {!agent ? (
-        <div style={{ marginTop: '10px', color: '#888' }}>Agent not loaded.</div>
+      {!opponent ? (
+        <div style={{ marginTop: '10px', color: '#888' }}>Opponent not loaded.</div>
       ) : (
         <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
@@ -380,7 +380,7 @@ export function InspectorPanel({
             <strong>MCTS — last search</strong>
             {lastSearch === null ? (
               <div style={{ color: '#888', fontSize: '0.9em', marginTop: '4px' }}>
-                No search yet (agent hasn&apos;t moved this game).
+                No search yet (opponent hasn&apos;t moved this game).
               </div>
             ) : (
               <>

@@ -11,7 +11,14 @@ import { POLICY_SIZE, type TrainingExample } from '../nn/index.js';
 import { legalMoves, isTerminal, toFen, type GameState, type Move } from '../rules/index.js';
 import { fromFen } from '../rules/index.js';
 import type { Policy } from '../mcts/index.js';
-import { playOneGame, runSelfPlayBatch } from './index.js';
+import {
+  playOneGame,
+  runSelfPlayBatch,
+  runEndgameGym,
+  parseGymScenarios,
+  type EndgameGymScenario,
+  type SideResult,
+} from './index.js';
 
 /** Deterministic mulberry32 PRNG — used by tests that need reproducible sampling. */
 function makePrng(seed: number): () => number {
@@ -131,7 +138,7 @@ describe('runSelfPlayBatch', () => {
   it('plays the requested number of games and tallies results', async () => {
     const start = fromFen('4k3/8/8/8/8/8/8/4K3 w - - 0 1');
     const result = await runSelfPlayBatch({
-      aiPolicy: uniformPolicy(0.5),
+      opponentPolicy: uniformPolicy(0.5),
       playerPolicy: uniformPolicy(-0.5),
       search: { simulations: 2, cPuct: 1.5 },
       count: 4,
@@ -149,20 +156,20 @@ describe('runSelfPlayBatch', () => {
     const seenColors: ('w' | 'b')[] = [];
     // 20 games: P(never see 'w' or never see 'b') = 2 * (1/2)^20 ≈ 0.000002
     await runSelfPlayBatch({
-      aiPolicy: uniformPolicy(0),
+      opponentPolicy: uniformPolicy(0),
       playerPolicy: uniformPolicy(0),
       search: { simulations: 2, cPuct: 1.5 },
       count: 20,
       maxPlies: 4,
-      onGame: (_i, info) => seenColors.push(info.aiColor),
+      onGame: (_i, info) => seenColors.push(info.opponentColor),
     });
     expect(seenColors).toContain('w');
     expect(seenColors).toContain('b');
   });
 
-  it('AI training examples are well-formed and tagged from the AI side', async () => {
+  it('Opponent training examples are well-formed and tagged from the opponent side', async () => {
     const result = await runSelfPlayBatch({
-      aiPolicy: uniformPolicy(0),
+      opponentPolicy: uniformPolicy(0),
       playerPolicy: uniformPolicy(0),
       search: { simulations: 2, cPuct: 1.5 },
       count: 2,
@@ -170,7 +177,7 @@ describe('runSelfPlayBatch', () => {
     });
     // Every training example must have a features tensor of the right
     // length and a valueTarget in {-1, 0, 1}.
-    for (const ex of result.aiTrainingExamples as TrainingExample[]) {
+    for (const ex of result.opponentTrainingExamples as TrainingExample[]) {
       expect(ex.features.length).toBeGreaterThan(0);
       expect([-1, 0, 1]).toContain(ex.valueTarget);
       if (ex.policyTarget !== null) {
@@ -179,34 +186,34 @@ describe('runSelfPlayBatch', () => {
     }
   });
 
-  it('threads onPly through with the per-game AI color attached', async () => {
-    const observed: Array<{ gameIndex: number; aiColor: 'w' | 'b'; plyIndex: number }> = [];
+  it('threads onPly through with the per-game opponent color attached', async () => {
+    const observed: Array<{ gameIndex: number; opponentColor: 'w' | 'b'; plyIndex: number }> = [];
     await runSelfPlayBatch({
-      aiPolicy: uniformPolicy(0),
+      opponentPolicy: uniformPolicy(0),
       playerPolicy: uniformPolicy(0),
       search: { simulations: 2, cPuct: 1.5 },
       count: 2,
       maxPlies: 2,
       onPly: (gameIndex, info) => observed.push({
         gameIndex,
-        aiColor: info.aiColor,
+        opponentColor: info.opponentColor,
         plyIndex: info.plyIndex,
       }),
     });
     // At minimum, each game contributes its starting-position observation.
     expect(observed.length).toBeGreaterThanOrEqual(2);
-    // All plies within a single game must share the same aiColor.
+    // All plies within a single game must share the same opponentColor.
     const gameZero = observed.filter(o => o.gameIndex === 0);
     const gameOne = observed.filter(o => o.gameIndex === 1);
-    expect(new Set(gameZero.map(o => o.aiColor)).size).toBe(1);
-    expect(new Set(gameOne.map(o => o.aiColor)).size).toBe(1);
+    expect(new Set(gameZero.map(o => o.opponentColor)).size).toBe(1);
+    expect(new Set(gameOne.map(o => o.opponentColor)).size).toBe(1);
   });
 
   it('honors the abort signal between games', async () => {
     const controller = new AbortController();
     let games = 0;
     const result = await runSelfPlayBatch({
-      aiPolicy: uniformPolicy(0),
+      opponentPolicy: uniformPolicy(0),
       playerPolicy: uniformPolicy(0),
       search: { simulations: 2, cPuct: 1.5 },
       count: 4,
@@ -229,7 +236,7 @@ describe('runSelfPlayBatch', () => {
     const states = [start0, start1];
     const observed: string[] = [];
     await runSelfPlayBatch({
-      aiPolicy: uniformPolicy(0),
+      opponentPolicy: uniformPolicy(0),
       playerPolicy: uniformPolicy(0),
       search: { simulations: 4, cPuct: 1.5 },
       count: 2,
@@ -244,6 +251,132 @@ describe('runSelfPlayBatch', () => {
     expect(observed).toHaveLength(2);
     expect(observed[0]).toBe(toFen(start0));
     expect(observed[1]).toBe(toFen(start1));
+  });
+});
+
+describe('runEndgameGym', () => {
+  // The deterministic uniform policy used by the rest of this file
+  // doesn't try to win — it just propagates priors. To produce reliable
+  // "opponent wins" / "opponent doesn't win" outcomes for the gym tests we need to
+  // pin the outcome from the starting position itself, so we use
+  // textbook mate-in-1 positions where any tree exploration finds the
+  // mate, and KvK draws where neither side can win.
+
+  it('stops attempting a scenario after the opponent wins one game', async () => {
+    // Mate-in-1: K+R vs K. With a few sims, MCTS finds the mate.
+    const games: { scenarioIdx: number; gameInScenario: number; result: SideResult }[] = [];
+    const scenariosDone: { scenarioIdx: number; converted: boolean; gamesPlayed: number }[] = [];
+
+    const result = await runEndgameGym({
+      scenarios: parseGymScenarios([
+        { id: 'mate-in-1', fen: '7k/R7/6K1/8/8/8/8/8 w - - 0 1', opponentColor: 'w' },
+      ]),
+      opponentPolicy: uniformPolicy(0),
+      playerPolicy: uniformPolicy(0),
+      search: { simulations: 16, cPuct: 1.5 },
+      maxGamesPerScenario: 5,
+      maxPlies: 4,
+      onGame: (info) => games.push({
+        scenarioIdx: info.scenarioIdx,
+        gameInScenario: info.gameInScenario,
+        result: info.opponentResult,
+      }),
+      onScenarioDone: (info) => scenariosDone.push(info),
+    });
+
+    // The opponent should have won at least once, and we should have stopped
+    // attempting that scenario as soon as it did.
+    expect(games.length).toBeGreaterThanOrEqual(1);
+    expect(games[games.length - 1].result).toBe('win');
+    expect(result.scenariosAttempted).toBe(1);
+    expect(result.scenariosConverted).toBe(1);
+    expect(result.totalWins).toBe(1);
+    expect(scenariosDone).toHaveLength(1);
+    expect(scenariosDone[0].converted).toBe(true);
+  });
+
+  it('moves on after maxGamesPerScenario when the opponent never wins', async () => {
+    // Bare kings — nobody can win, so the opponent cannot convert. The gym
+    // should burn through maxGamesPerScenario attempts and then move on.
+    const drawnScenario: EndgameGymScenario = {
+      id: 'kvk',
+      startingState: fromFen('4k3/8/8/8/8/8/8/4K3 w - - 0 1'),
+      opponentColor: 'w',
+    };
+    const result = await runEndgameGym({
+      scenarios: [drawnScenario],
+      opponentPolicy: uniformPolicy(0),
+      playerPolicy: uniformPolicy(0),
+      search: { simulations: 2, cPuct: 1.5 },
+      maxGamesPerScenario: 3,
+      maxPlies: 4,
+    });
+    expect(result.scenariosAttempted).toBe(1);
+    expect(result.scenariosConverted).toBe(0);
+    expect(result.totalGames).toBe(3);
+    expect(result.totalWins).toBe(0);
+  });
+
+  it('only records training examples from games the opponent won', async () => {
+    // Combine a winnable scenario with a losing-side-to-move scenario.
+    // The winnable one converts on attempt 1 (one game played). The
+    // unwinnable one runs out of attempts (no games converted). All
+    // recorded examples must trace back to the winnable game's win.
+    const scenarios: EndgameGymScenario[] = [
+      // Mate-in-1 for white.
+      { id: 'mate-in-1', startingState: fromFen('7k/R7/6K1/8/8/8/8/8 w - - 0 1'), opponentColor: 'w' },
+      // K+K — drawn, the opponent can't win.
+      { id: 'kvk', startingState: fromFen('4k3/8/8/8/8/8/8/4K3 w - - 0 1'), opponentColor: 'w' },
+    ];
+    const result = await runEndgameGym({
+      scenarios,
+      opponentPolicy: uniformPolicy(0),
+      playerPolicy: uniformPolicy(0),
+      search: { simulations: 16, cPuct: 1.5 },
+      maxGamesPerScenario: 2,
+      maxPlies: 4,
+    });
+    // At least one win, no losses-or-draws-with-policy-targets in the
+    // training set: every recorded example must have a policy target
+    // and a positive value target (since the gym records only winning
+    // games and `buildTrainingExamples` gives the winner side-to-move
+    // value = +1 and a one-hot policy target).
+    expect(result.scenariosConverted).toBeGreaterThanOrEqual(1);
+    for (const ex of result.opponentTrainingExamples) {
+      expect(ex.valueTarget).toBe(1);
+      expect(ex.policyTarget).not.toBeNull();
+    }
+  });
+
+  it('honors the abort signal between games', async () => {
+    const controller = new AbortController();
+    const scenarios: EndgameGymScenario[] = [
+      { id: 'kvk', startingState: fromFen('4k3/8/8/8/8/8/8/4K3 w - - 0 1'), opponentColor: 'w' },
+      { id: 'kvk2', startingState: fromFen('4k3/8/8/8/8/8/8/4K3 w - - 0 1'), opponentColor: 'w' },
+    ];
+    const result = await runEndgameGym({
+      scenarios,
+      opponentPolicy: uniformPolicy(0),
+      playerPolicy: uniformPolicy(0),
+      search: { simulations: 2, cPuct: 1.5 },
+      maxGamesPerScenario: 4,
+      maxPlies: 4,
+      signal: controller.signal,
+      onGame: () => controller.abort(),
+    });
+    // First game's onGame fires the abort. The loop should exit before
+    // starting any further games on this or the next scenario.
+    expect(result.totalGames).toBe(1);
+    expect(result.scenariosAttempted).toBe(1);
+  });
+
+  it('parseGymScenarios rejects scenarios where the opponent does not own the move', () => {
+    expect(() =>
+      parseGymScenarios([
+        // White-to-move FEN but we lie and claim Black should play.
+        { id: 'wrong', fen: '4k3/8/8/8/8/8/8/4K3 w - - 0 1', opponentColor: 'b' },
+      ]),
+    ).toThrow(/side-to-move/);
   });
 });
 

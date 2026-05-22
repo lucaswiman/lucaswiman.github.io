@@ -1,16 +1,18 @@
 // PlayerImitator — a second ChessNet whose only job is to predict the
-// user's next move from a position the user is facing. The AI's
+// user's next move from a position the user is facing. The opponent's
 // training loop plays self-play games against this imitator under MCTS
 // so we can generate replay data faster than waiting for the user to
 // finish a game.
 //
 // Storage layout: weights + replay buffer + meta, namespaced under
 // `imitator/…` so the imitator's persistence does not collide with the
-// AI's `agent/…` keys. Both pieces of state are independently
-// versioned via NN_VERSION.
+// opponent's `agent/…` keys (the legacy `agent/` prefix is kept on disk
+// for backward compatibility with users' trained networks; see
+// OPPONENT_STORAGE_KEYS in core/opponent). Both pieces of state are
+// independently versioned via NN_VERSION.
 
-import type { GameMoveRecord } from '../agent/index.js';
-import { buildImitationExamples } from '../agent/index.js';
+import type { GameMoveRecord } from '../opponent/index.js';
+import { buildImitationExamples } from '../opponent/index.js';
 import {
   ChessNet,
   deserialize,
@@ -107,7 +109,7 @@ export function createPlayerImitator(
 /**
  * Restore an imitator from storage if compatible weights are present,
  * otherwise return a fresh one built from `defaults`. Mirrors
- * `loadAgent` but reads from the imitator's keyspace.
+ * `loadOpponent` but reads from the imitator's keyspace.
  */
 export async function loadPlayerImitator(
   storage: BlobStorage,

@@ -1,15 +1,17 @@
-// Agent — glues ChessNet + MCTS + ReplayBuffer into the single object
-// the UI talks to.
+// Opponent — glues ChessNet + MCTS + ReplayBuffer into the single object
+// the UI talks to. This is the network the user plays against (the AI
+// side of the matchup); the companion `imitator` network in
+// `core/imitator/` stands in for the user during self-play.
 //
 // Responsibilities:
 //   - Adapt ChessNet to MCTS's Policy interface (mask illegal moves,
 //     renormalize, pass value through).
-//   - Run MCTS with AgentConfig, then pick a move from the visit-count
+//   - Run MCTS with OpponentConfig, then pick a move from the visit-count
 //     distribution (temperature=0 → greedy; temperature>0 → sample).
 //   - Convert finished games into TrainingExamples via the
 //     winner-reinforcement rule and push them into the ReplayBuffer.
 //   - Sample a minibatch from the buffer and drive one gradient step.
-//   - Serialize / restore the whole agent (weights + buffer + meta)
+//   - Serialize / restore the whole opponent (weights + buffer + meta)
 //     through the BlobStorage port.
 //
 // What this module does NOT do:
@@ -57,9 +59,34 @@ export interface GameMoveRecord {
   move: Move;
   /** Whose move it was. */
   sideToMove: 'w' | 'b';
+  /**
+   * Sorted, de-duplicated set of policy indices for the legal moves at
+   * this position. Captured at record time because the position is not
+   * recoverable from `features` cheaply. Feeds the illegal-move loss
+   * term (`ChessNet.trainBatch`): the network is penalized for putting
+   * softmax mass on any index NOT in this list.
+   *
+   * Promotion underpromotions collapse to a single policy index (the
+   * TODO in `core/nn/index.ts`), so this list is a set, not a multiset
+   * — `e7e8q` / `e7e8r` / `e7e8b` / `e7e8n` all contribute the same
+   * index and the slot is "legal" if any one of them is.
+   */
+  legalMoveIndices: number[];
 }
 
-export interface AgentConfig {
+/**
+ * Compute the sorted, de-duplicated set of policy indices for the
+ * legal moves at `state`. Used by every site that builds a
+ * `GameMoveRecord`. Lives here (next to `policyIndexFromUci`'s
+ * importer) so the implementation can stay a one-liner.
+ */
+export function legalMoveIndicesFor(state: GameState): number[] {
+  const set = new Set<number>();
+  for (const m of legalMoves(state)) set.add(policyIndexFromUci(m));
+  return Array.from(set).sort((a, b) => a - b);
+}
+
+export interface OpponentConfig {
   /** MCTS simulations per selectMove call. */
   simulations: number;
   /** PUCT exploration constant. */
@@ -80,8 +107,8 @@ export interface AgentConfig {
   temperature?: number;
 }
 
-export interface Agent {
-  /** Pick a move for the agent to play from `state`. */
+export interface Opponent {
+  /** Pick a move for the opponent to play from `state`. */
   selectMove(
     state: GameState,
   ): Promise<{ move: Move; rootValue: number; visitCounts: Map<Move, number> }>;
@@ -113,14 +140,23 @@ export interface Agent {
   readonly replayBuffer: ReplayBuffer;
 }
 
-export interface CreateAgentOptions {
+export interface CreateOpponentOptions {
   net: ChessNet;
   replayBuffer: ReplayBuffer;
-  config: AgentConfig;
+  config: OpponentConfig;
 }
 
-/** Storage keys used by loadAgent / saveTo. */
-export const AGENT_STORAGE_KEYS = {
+/**
+ * Storage keys used by loadOpponent / saveTo.
+ *
+ * NOTE: the string values ('agent/weights', 'agent/replay', 'agent/meta')
+ * intentionally retain the legacy "agent/" prefix even though the type
+ * was renamed to Opponent. These strings identify entries inside each
+ * user's IndexedDB; changing them would orphan every trained network in
+ * the wild. The TypeScript identifiers were renamed for consistency, but
+ * the on-disk keyspace must stay backward-compatible.
+ */
+export const OPPONENT_STORAGE_KEYS = {
   WEIGHTS: 'agent/weights',
   REPLAY: 'agent/replay',
   META: 'agent/meta',
@@ -251,7 +287,12 @@ export function buildTrainingExamples(
       policyTarget[idx] = 1;
     }
 
-    return { features: record.features, valueTarget, policyTarget };
+    return {
+      features: record.features,
+      valueTarget,
+      policyTarget,
+      legalMoveIndices: record.legalMoveIndices,
+    };
   });
 }
 
@@ -266,8 +307,8 @@ export function buildTrainingExamples(
  *
  *   - Every move gets a policy target — not just the winner's. We are
  *     trying to model what the user does, whether or not it works out.
- *   - Only the user's own move records should be passed in; the agent's
- *     moves are not part of the imitator's training signal.
+ *   - Only the user's own move records should be passed in; the
+ *     opponent's moves are not part of the imitator's training signal.
  *
  * Value target follows the same convention as `buildTrainingExamples`
  * (outcome from side-to-move's perspective at each position) so the
@@ -299,13 +340,18 @@ export function buildImitationExamples(
     const policyTarget = new Float32Array(POLICY_SIZE);
     policyTarget[policyIndexFromUci(record.move)] = 1;
 
-    return { features: record.features, valueTarget, policyTarget };
+    return {
+      features: record.features,
+      valueTarget,
+      policyTarget,
+      legalMoveIndices: record.legalMoveIndices,
+    };
   });
 }
 
-// ── createAgent ──────────────────────────────────────────────────────────────
+// ── createOpponent ───────────────────────────────────────────────────────────
 
-export function createAgent(opts: CreateAgentOptions): Agent {
+export function createOpponent(opts: CreateOpponentOptions): Opponent {
   const { net, replayBuffer, config } = opts;
 
   const selectMove = async (
@@ -342,9 +388,9 @@ export function createAgent(opts: CreateAgentOptions): Agent {
   const saveTo = async (storage: BlobStorage): Promise<void> => {
     const meta = { NN_VERSION };
     await Promise.all([
-      net.serialize().then(bytes => storage.put(AGENT_STORAGE_KEYS.WEIGHTS, bytes)),
-      storage.put(AGENT_STORAGE_KEYS.REPLAY, replayBuffer.serialize()),
-      putJson(storage, AGENT_STORAGE_KEYS.META, meta),
+      net.serialize().then(bytes => storage.put(OPPONENT_STORAGE_KEYS.WEIGHTS, bytes)),
+      storage.put(OPPONENT_STORAGE_KEYS.REPLAY, replayBuffer.serialize()),
+      putJson(storage, OPPONENT_STORAGE_KEYS.META, meta),
     ]);
   };
 
@@ -371,27 +417,27 @@ export function createAgent(opts: CreateAgentOptions): Agent {
   };
 }
 
-// ── loadAgent ────────────────────────────────────────────────────────────────
+// ── loadOpponent ─────────────────────────────────────────────────────────────
 
 /**
  * Restore weights + replay buffer from storage if present and compatible;
- * otherwise return a fresh agent built from `defaults`.
+ * otherwise return a fresh opponent built from `defaults`.
  *
  * Version mismatch (stored NN_VERSION differs from current NN_VERSION) is
- * treated as a cache miss — the stored state is ignored and a fresh agent
- * is returned. This ensures that an architecture or encoding change doesn't
- * silently corrupt training.
+ * treated as a cache miss — the stored state is ignored and a fresh
+ * opponent is returned. This ensures that an architecture or encoding
+ * change doesn't silently corrupt training.
  */
-export async function loadAgent(
+export async function loadOpponent(
   storage: BlobStorage,
   defaults: {
     net: ChessNet;
-    config: AgentConfig;
+    config: OpponentConfig;
     replayCapacity: number;
   },
-): Promise<Agent> {
+): Promise<Opponent> {
   const fresh = () =>
-    createAgent({
+    createOpponent({
       net: defaults.net,
       replayBuffer: createReplayBuffer(defaults.replayCapacity),
       config: defaults.config,
@@ -400,7 +446,7 @@ export async function loadAgent(
   // Read meta first — check version before loading weights.
   const meta = await getJson<{ NN_VERSION: number }>(
     storage,
-    AGENT_STORAGE_KEYS.META,
+    OPPONENT_STORAGE_KEYS.META,
   );
 
   if (meta === null || meta.NN_VERSION !== NN_VERSION) {
@@ -410,8 +456,8 @@ export async function loadAgent(
 
   // Try to load weights and replay buffer.
   const [weightBytes, replayBytes] = await Promise.all([
-    storage.get(AGENT_STORAGE_KEYS.WEIGHTS),
-    storage.get(AGENT_STORAGE_KEYS.REPLAY),
+    storage.get(OPPONENT_STORAGE_KEYS.WEIGHTS),
+    storage.get(OPPONENT_STORAGE_KEYS.REPLAY),
   ]);
 
   if (weightBytes === null) {
@@ -431,7 +477,7 @@ export async function loadAgent(
       ? deserializeReplayBuffer(replayBytes, defaults.replayCapacity)
       : createReplayBuffer(defaults.replayCapacity);
 
-  return createAgent({ net, replayBuffer, config: defaults.config });
+  return createOpponent({ net, replayBuffer, config: defaults.config });
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────

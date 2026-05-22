@@ -1,38 +1,39 @@
-// onAgentRefresh round-trips through storage rather than swapping ChessNet
+// onOpponentRefresh round-trips through storage rather than swapping ChessNet
 // state in place — same code path as startup, one extra deserialize is cheap
 // against the training cost.
 //
-// The Train button drives both nets in lockstep: AI from its replay
-// buffer, then imitator from its replay buffer. The AlphaZero-shaped
+// The Train button drives both nets in lockstep: opponent from its
+// replay buffer, then imitator from its replay buffer. The AlphaZero-shaped
 // loss is identical for both, and giving the user a single button keeps
 // the framing simple ("train everything you've learned from"). The
 // imitator pass is silently skipped when its buffer is empty.
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import type { Agent } from '../core/agent/index.js';
+import type { Opponent } from '../core/opponent/index.js';
 import type { PlayerImitator } from '../core/imitator/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
 import { TrainingClient } from './training-client.js';
 import type { DoneCallback, ProgressCallback } from './training-client.js';
-import { AGENT_STORAGE_KEYS } from '../core/agent/index.js';
+import { OPPONENT_STORAGE_KEYS } from '../core/opponent/index.js';
 import { IMITATOR_STORAGE_KEYS } from '../core/imitator/index.js';
 
 export interface TrainingPanelProps {
-  agent: Agent;
+  opponent: Opponent;
   imitator: PlayerImitator | null;
   storage: BlobStorage;
-  onAgentRefresh: () => Promise<void>;
+  onOpponentRefresh: () => Promise<void>;
 }
 
 interface TrainProgress {
-  phase: 'ai' | 'imitator';
+  phase: 'opponent' | 'imitator';
   stepIndex: number;
   valueLoss: number;
   policyLoss: number;
+  illegalLoss: number;
   totalLoss: number;
 }
 
-export function TrainingPanel({ agent, imitator, storage, onAgentRefresh }: TrainingPanelProps) {
+export function TrainingPanel({ opponent, imitator, storage, onOpponentRefresh }: TrainingPanelProps) {
   const [steps, setSteps] = useState(100);
   const [batchSize, setBatchSize] = useState(32);
   const [training, setTraining] = useState(false);
@@ -51,7 +52,7 @@ export function TrainingPanel({ agent, imitator, storage, onAgentRefresh }: Trai
   const handleTrain = useCallback(async () => {
     if (training) return;
     if (!imitator) {
-      // The imitator is loaded alongside the agent at startup, so this
+      // The imitator is loaded alongside the opponent at startup, so this
       // null state is just the initial flash before useEffect resolves.
       setStatusMsg('Imitator not ready yet — try again in a moment.');
       return;
@@ -68,10 +69,10 @@ export function TrainingPanel({ agent, imitator, storage, onAgentRefresh }: Trai
     let imitatorReplay: Uint8Array;
     try {
       [weights, imitatorWeights] = await Promise.all([
-        agent.net.serialize(),
+        opponent.net.serialize(),
         imitator.net.serialize(),
       ]);
-      replay = agent.replayBuffer.serialize();
+      replay = opponent.replayBuffer.serialize();
       imitatorReplay = imitator.replayBuffer.serialize();
     } catch (err) {
       setStatusMsg(`Serialization failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -85,23 +86,24 @@ export function TrainingPanel({ agent, imitator, storage, onAgentRefresh }: Trai
         stepIndex: msg.stepIndex,
         valueLoss: msg.valueLoss,
         policyLoss: msg.policyLoss,
+        illegalLoss: msg.illegalLoss,
         totalLoss: msg.totalLoss,
       });
     };
 
     const onDone: DoneCallback = async (result) => {
-      // Persist both nets' new state, then trigger an agent reload so
+      // Persist both nets' new state, then trigger an opponent reload so
       // the in-memory handles match what's on disk.
       try {
         await Promise.all([
-          storage.put(AGENT_STORAGE_KEYS.WEIGHTS, result.weights),
-          storage.put(AGENT_STORAGE_KEYS.REPLAY, result.replay),
+          storage.put(OPPONENT_STORAGE_KEYS.WEIGHTS, result.weights),
+          storage.put(OPPONENT_STORAGE_KEYS.REPLAY, result.replay),
           storage.put(IMITATOR_STORAGE_KEYS.WEIGHTS, result.imitatorWeights),
           storage.put(IMITATOR_STORAGE_KEYS.REPLAY, result.imitatorReplay),
         ]);
-        await onAgentRefresh();
+        await onOpponentRefresh();
         setStatusMsg(
-          `Training done — AI ${result.finalStep} step(s), ` +
+          `Training done — opponent ${result.finalStep} step(s), ` +
           `imitator ${result.imitatorFinalStep} step(s). Saved and reloaded.`,
         );
       } catch (err) {
@@ -126,7 +128,7 @@ export function TrainingPanel({ agent, imitator, storage, onAgentRefresh }: Trai
         replay,
         imitatorWeights,
         imitatorReplay,
-        replayCapacity: agent.replayBuffer.capacity(),
+        replayCapacity: opponent.replayBuffer.capacity(),
         batchSize,
         totalSteps: steps,
         reportEvery: Math.max(1, Math.floor(steps / 10)),
@@ -135,15 +137,15 @@ export function TrainingPanel({ agent, imitator, storage, onAgentRefresh }: Trai
       onDone,
       onError,
     );
-  }, [training, agent, imitator, storage, batchSize, steps, onAgentRefresh]);
+  }, [training, opponent, imitator, storage, batchSize, steps, onOpponentRefresh]);
 
   const handleStop = useCallback(() => {
     clientRef.current?.stop();
     // The worker will post 'done' and onDone will set training = false.
   }, []);
 
-  const bufferSize = agent.replayBuffer.size();
-  const bufferCapacity = agent.replayBuffer.capacity();
+  const bufferSize = opponent.replayBuffer.size();
+  const bufferCapacity = opponent.replayBuffer.capacity();
   const imitatorBufferSize = imitator?.replayBuffer.size() ?? 0;
 
   const canTrain = !training && bufferSize >= batchSize && imitator !== null;
@@ -165,7 +167,7 @@ export function TrainingPanel({ agent, imitator, storage, onAgentRefresh }: Trai
       <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
         {/* Buffer readout */}
         <div>
-          <strong>AI replay buffer:</strong> {bufferSize.toLocaleString()} /{' '}
+          <strong>Opponent replay buffer:</strong> {bufferSize.toLocaleString()} /{' '}
           {bufferCapacity.toLocaleString()} examples
           {bufferSize < batchSize && (
             <span style={{ color: '#888', marginLeft: '8px', fontSize: '0.9em' }}>
@@ -234,9 +236,10 @@ export function TrainingPanel({ agent, imitator, storage, onAgentRefresh }: Trai
         {/* Progress */}
         {training && progress && (
           <div style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
-            {progress.phase === 'ai' ? 'AI' : 'Imitator'} step {progress.stepIndex} / {steps} —{' '}
+            {progress.phase === 'opponent' ? 'Opponent' : 'Imitator'} step {progress.stepIndex} / {steps} —{' '}
             val: {progress.valueLoss.toFixed(4)},{' '}
             pol: {progress.policyLoss.toFixed(4)},{' '}
+            ill: {progress.illegalLoss.toFixed(4)},{' '}
             total: {progress.totalLoss.toFixed(4)}
           </div>
         )}

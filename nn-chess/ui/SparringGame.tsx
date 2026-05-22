@@ -11,13 +11,14 @@ import {
 } from '../core/rules/index.js';
 import type { GameState, Move, Outcome } from '../core/rules/index.js';
 import { encodeState } from '../core/encoding/index.js';
-import type { Agent, GameMoveRecord } from '../core/agent/index.js';
+import type { Opponent, GameMoveRecord } from '../core/opponent/index.js';
+import { legalMoveIndicesFor } from '../core/opponent/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
 import { StockfishEngine } from './stockfish-protocol.js';
 import type { StockfishConfig } from './stockfish-protocol.js';
-import { createAgentStorage, loadAgentFromStorage } from './agent-config.js';
+import { createOpponentStorage, loadOpponentFromStorage } from './opponent-config.js';
 
-type AgentColor = 'w' | 'b' | 'alternate';
+type OpponentColor = 'w' | 'b' | 'alternate';
 type RunState = 'idle' | 'running' | 'paused' | 'stopping';
 
 interface Tally {
@@ -33,8 +34,8 @@ interface SparringSession {
   history: GameMoveRecord[];
   /** Which game number (1-indexed) we are on, within this run. */
   gameIndex: number;
-  /** Which color the agent plays this game. */
-  agentColor: 'w' | 'b';
+  /** Which color the opponent plays this game. */
+  opponentColor: 'w' | 'b';
   /** Move count in current game. */
   moveCount: number;
   /** Last UCI move played. */
@@ -43,12 +44,12 @@ interface SparringSession {
   lastOutcome: Outcome | null;
 }
 
-function freshSession(agentColor: 'w' | 'b', gameIndex: number): SparringSession {
+function freshSession(opponentColor: 'w' | 'b', gameIndex: number): SparringSession {
   return {
     state: initialState(),
     history: [],
     gameIndex,
-    agentColor,
+    opponentColor,
     moveCount: 0,
     lastMove: null,
     lastOutcome: null,
@@ -67,21 +68,21 @@ function outcomeLabel(o: Outcome | null): string {
   }
 }
 
-function agentResultFromOutcome(agentColor: 'w' | 'b', o: Outcome): 'win' | 'draw' | 'loss' {
+function opponentResultFromOutcome(opponentColor: 'w' | 'b', o: Outcome): 'win' | 'draw' | 'loss' {
   if (o === 'draw') return 'draw';
-  if (o === 'white-wins') return agentColor === 'w' ? 'win' : 'loss';
-  return agentColor === 'b' ? 'win' : 'loss';
+  if (o === 'white-wins') return opponentColor === 'w' ? 'win' : 'loss';
+  return opponentColor === 'b' ? 'win' : 'loss';
 }
 
 
 
 export default function SparringGame() {
-  const [storage] = useState<BlobStorage>(createAgentStorage);
-  const [agent, setAgent] = useState<Agent | null>(null);
-  const agentRef = useRef<Agent | null>(null);
-  agentRef.current = agent;
+  const [storage] = useState<BlobStorage>(createOpponentStorage);
+  const [opponent, setOpponent] = useState<Opponent | null>(null);
+  const opponentRef = useRef<Opponent | null>(null);
+  opponentRef.current = opponent;
 
-  const [agentColorChoice, setAgentColorChoice] = useState<AgentColor>('w');
+  const [opponentColorChoice, setOpponentColorChoice] = useState<OpponentColor>('w');
   const [sfSkill, setSfSkill] = useState(5);
   const [sfMovetime, setSfMovetime] = useState(100);
   const [gamesToPlay, setGamesToPlay] = useState(10);
@@ -101,10 +102,10 @@ export default function SparringGame() {
 
   useEffect(() => {
     let cancelled = false;
-    loadAgentFromStorage(storage)
-      .then(loaded => { if (!cancelled) setAgent(loaded); })
+    loadOpponentFromStorage(storage)
+      .then(loaded => { if (!cancelled) setOpponent(loaded); })
       .catch(err => {
-        if (!cancelled) setError(`Failed to load agent: ${err instanceof Error ? err.message : String(err)}`);
+        if (!cancelled) setError(`Failed to load opponent: ${err instanceof Error ? err.message : String(err)}`);
       });
     return () => { cancelled = true; };
   }, [storage]);
@@ -122,7 +123,7 @@ export default function SparringGame() {
   const runGameLoop = useCallback(
     async (
       totalGames: number,
-      colorChoice: AgentColor,
+      colorChoice: OpponentColor,
       sfConfig: StockfishConfig,
     ) => {
       if (gameLoopRunning.current) return;
@@ -143,8 +144,8 @@ export default function SparringGame() {
         return;
       }
 
-      // Helper: resolve agent color for game N (0-indexed).
-      function agentColorForGame(idx: number): 'w' | 'b' {
+      // Helper: resolve opponent color for game N (0-indexed).
+      function opponentColorForGame(idx: number): 'w' | 'b' {
         if (colorChoice === 'alternate') return idx % 2 === 0 ? 'w' : 'b';
         return colorChoice;
       }
@@ -152,37 +153,44 @@ export default function SparringGame() {
       const infinite = totalGames === 0;
       let gameIdx = 0;
 
+      // TS narrows `runStateRef.current` to the value satisfying the
+      // loop condition and doesn't re-widen across awaits, which makes
+      // subsequent `=== 'stopping'` / `=== 'paused'` checks look like
+      // "comparisons with no overlap." A local read function returns
+      // the raw RunState type each call, defeating that narrowing.
+      const getRunState = (): RunState => runStateRef.current;
+
       while (
         (infinite || gameIdx < totalGames) &&
-        runStateRef.current !== 'stopping'
+        getRunState() !== 'stopping'
       ) {
         // Handle pause — busy-wait with a small sleep.
-        while (runStateRef.current === 'paused') {
+        while (getRunState() === 'paused') {
           await new Promise<void>(r => setTimeout(r, 200));
         }
-        if (runStateRef.current === 'stopping') break;
+        if (getRunState() === 'stopping') break;
 
-        const agentColor = agentColorForGame(gameIdx);
-        let sess = freshSession(agentColor, gameIdx + 1);
+        const opponentColor = opponentColorForGame(gameIdx);
+        let sess = freshSession(opponentColor, gameIdx + 1);
         setSession(sess);
         sessionRef.current = sess;
 
         // Play one game.
-        while (!isTerminal(sess.state) && runStateRef.current !== 'stopping') {
+        while (!isTerminal(sess.state) && getRunState() !== 'stopping') {
           // Handle pause mid-game.
-          while (runStateRef.current === 'paused') {
+          while (getRunState() === 'paused') {
             await new Promise<void>(r => setTimeout(r, 200));
           }
-          if (runStateRef.current === 'stopping') break;
+          if (getRunState() === 'stopping') break;
 
-          const currentAgent = agentRef.current!;
+          const currentOpponent = opponentRef.current!;
           const currentSide = sideToMove(sess.state);
           const preMoveState = sess.state;
           let move: Move;
 
-          if (currentSide === agentColor) {
-            // Agent's turn.
-            const result = await currentAgent.selectMove(preMoveState);
+          if (currentSide === opponentColor) {
+            // Opponent's turn.
+            const result = await currentOpponent.selectMove(preMoveState);
             move = result.move;
           } else {
             // Stockfish's turn.
@@ -200,6 +208,7 @@ export default function SparringGame() {
             features: encodeState(preMoveState),
             move,
             sideToMove: currentSide,
+            legalMoveIndices: legalMoveIndicesFor(preMoveState),
           };
 
           const nextState = applyMove(preMoveState, move);
@@ -216,24 +225,24 @@ export default function SparringGame() {
         }
 
         // Game over (or stopped mid-game — skip recording if interrupted).
-        if (runStateRef.current === 'stopping') break;
+        if (getRunState() === 'stopping') break;
 
         const finalOutcome = outcome(sess.state);
         if (finalOutcome !== 'ongoing') {
-          const currentAgent = agentRef.current!;
-          currentAgent.recordGameResult(sess.history, finalOutcome);
-          currentAgent.saveTo(storage).catch(err => {
+          const currentOpponent = opponentRef.current!;
+          currentOpponent.recordGameResult(sess.history, finalOutcome);
+          currentOpponent.saveTo(storage).catch(err => {
             setError(
               `Failed to save after game: ${err instanceof Error ? err.message : String(err)}`,
             );
           });
 
           // Update tally.
-          const agentResult = agentResultFromOutcome(agentColor, finalOutcome);
+          const opponentResult = opponentResultFromOutcome(opponentColor, finalOutcome);
           setTally(prev => ({
-            wins:   agentResult === 'win'  ? prev.wins + 1  : prev.wins,
-            draws:  agentResult === 'draw' ? prev.draws + 1 : prev.draws,
-            losses: agentResult === 'loss' ? prev.losses + 1 : prev.losses,
+            wins:   opponentResult === 'win'  ? prev.wins + 1  : prev.wins,
+            draws:  opponentResult === 'draw' ? prev.draws + 1 : prev.draws,
+            losses: opponentResult === 'loss' ? prev.losses + 1 : prev.losses,
           }));
 
           // Update session with final outcome.
@@ -260,7 +269,7 @@ export default function SparringGame() {
 
   const handleStart = useCallback(() => {
     if (runState !== 'idle') return;
-    if (!agent) return;
+    if (!opponent) return;
 
     setError(null);
     setTally({ wins: 0, draws: 0, losses: 0 });
@@ -269,8 +278,8 @@ export default function SparringGame() {
     runStateRef.current = 'running';
 
     const sfConfig: StockfishConfig = { skill: sfSkill, movetimeMs: sfMovetime };
-    runGameLoop(gamesToPlay, agentColorChoice, sfConfig);
-  }, [runState, agent, sfSkill, sfMovetime, gamesToPlay, agentColorChoice, runGameLoop]);
+    runGameLoop(gamesToPlay, opponentColorChoice, sfConfig);
+  }, [runState, opponent, sfSkill, sfMovetime, gamesToPlay, opponentColorChoice, runGameLoop]);
 
   const handlePause = useCallback(() => {
     if (runState !== 'running') return;
@@ -292,15 +301,15 @@ export default function SparringGame() {
 
 
 
-  if (!agent && !error) {
+  if (!opponent && !error) {
     return (
       <div style={{ fontFamily: 'sans-serif', padding: '16px' }}>
-        Loading agent…
+        Loading opponent…
       </div>
     );
   }
 
-  if (error && !agent) {
+  if (error && !opponent) {
     return (
       <div style={{ fontFamily: 'sans-serif', padding: '16px', color: '#c00' }}>
         {error}
@@ -315,7 +324,7 @@ export default function SparringGame() {
 
   const currentSide = session ? sideToMove(session.state) : null;
   const boardOrientation =
-    session?.agentColor === 'b' ? 'black' : 'white';
+    session?.opponentColor === 'b' ? 'black' : 'white';
 
   const totalGamesToDisplay = gamesToPlay === 0 ? '∞' : gamesToPlay;
 
@@ -334,17 +343,17 @@ export default function SparringGame() {
       >
         <legend style={{ fontWeight: 'bold' }}>Sparring config</legend>
 
-        {/* Agent color */}
+        {/* Opponent color */}
         <div style={{ marginBottom: '10px', display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <strong>Agent plays as:</strong>
-          {(['w', 'b', 'alternate'] as AgentColor[]).map(c => (
+          <strong>Opponent plays as:</strong>
+          {(['w', 'b', 'alternate'] as OpponentColor[]).map(c => (
             <label key={c} style={{ cursor: 'pointer' }}>
               <input
                 type="radio"
-                name="agentColor"
+                name="opponentColor"
                 value={c}
-                checked={agentColorChoice === c}
-                onChange={() => setAgentColorChoice(c)}
+                checked={opponentColorChoice === c}
+                onChange={() => setOpponentColorChoice(c)}
               />
               {' '}
               {c === 'w' ? 'White' : c === 'b' ? 'Black' : 'Alternate'}
@@ -401,8 +410,8 @@ export default function SparringGame() {
         <button
           type="button"
           onClick={handleStart}
-          disabled={!isIdle || !agent}
-          style={{ padding: '8px 20px', cursor: isIdle && agent ? 'pointer' : 'default' }}
+          disabled={!isIdle || !opponent}
+          style={{ padding: '8px 20px', cursor: isIdle && opponent ? 'pointer' : 'default' }}
         >
           Start
         </button>
@@ -459,8 +468,8 @@ export default function SparringGame() {
                 <strong>Game:</strong>{' '}
                 {session.gameIndex} of {totalGamesToDisplay}
                 {' | '}
-                <strong>Agent plays:</strong>{' '}
-                {session.agentColor === 'w' ? 'White' : 'Black'}
+                <strong>Opponent plays:</strong>{' '}
+                {session.opponentColor === 'w' ? 'White' : 'Black'}
                 {' | '}
                 <strong>Move:</strong> {session.moveCount}
                 {currentSide && (
@@ -468,7 +477,7 @@ export default function SparringGame() {
                     {' | '}
                     <strong>To move:</strong>{' '}
                     {currentSide === 'w' ? 'White' : 'Black'}
-                    {currentSide === session.agentColor ? ' (agent)' : ' (Stockfish)'}
+                    {currentSide === session.opponentColor ? ' (opponent)' : ' (Stockfish)'}
                   </>
                 )}
               </div>
@@ -481,8 +490,8 @@ export default function SparringGame() {
                 <div>
                   <strong>Last game:</strong>{' '}
                   {outcomeLabel(session.lastOutcome)}
-                  {' — agent '}
-                  {agentResultFromOutcome(session.agentColor, session.lastOutcome)}
+                  {' — opponent '}
+                  {opponentResultFromOutcome(session.opponentColor, session.lastOutcome)}
                 </div>
               )}
             </>
@@ -506,7 +515,7 @@ export default function SparringGame() {
             fontSize: '0.9em',
           }}
         >
-          <strong>Session tally</strong> (agent){' '}
+          <strong>Session tally</strong> (opponent){' '}
           — Wins: <strong>{tally.wins}</strong>
           {' | '}Draws: <strong>{tally.draws}</strong>
           {' | '}Losses: <strong>{tally.losses}</strong>

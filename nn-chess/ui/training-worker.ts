@@ -5,13 +5,13 @@
  * not block the UI. Communicates with the main thread via the typed
  * TrainRequest / TrainResponse protocol defined in training-protocol.ts.
  *
- * Trains BOTH the AI net and the player-imitator net in one worker
- * invocation. Each net is trained against its own replay buffer with
- * the same `value_loss + policy_loss` loop. If either buffer is smaller
- * than `batchSize`, that net is skipped (this is expected on a fresh
- * install where the imitator has zero recorded moves) — only an empty
- * AI buffer is reported as an error, since the user explicitly asked
- * to train.
+ * Trains BOTH the opponent net and the player-imitator net in one
+ * worker invocation. Each net is trained against its own replay buffer
+ * with the same `value_loss + policy_loss` loop. If either buffer is
+ * smaller than `batchSize`, that net is skipped (this is expected on a
+ * fresh install where the imitator has zero recorded moves) — only an
+ * empty opponent buffer is reported as an error, since the user
+ * explicitly asked to train.
  *
  * Imports ONLY from core/ modules and the shared protocol file — no
  * React, no DOM, no UI-only code. This keeps the worker safe to spin
@@ -52,7 +52,7 @@ let stopRequested = false;
 async function trainNet(
   net: ChessNet,
   buffer: ReplayBuffer,
-  phase: 'ai' | 'imitator',
+  phase: 'opponent' | 'imitator',
   batchSize: number,
   totalSteps: number,
   reportEvery: number,
@@ -74,6 +74,7 @@ async function trainNet(
         stepIndex: step + 1,
         valueLoss: losses.valueLoss,
         policyLoss: losses.policyLoss,
+        illegalLoss: losses.illegalLoss,
         totalLoss: losses.totalLoss,
       };
       self.postMessage(msg);
@@ -109,14 +110,14 @@ self.onmessage = async (event: MessageEvent<TrainRequest>) => {
   } = req;
 
   // Deserialize both networks.
-  let aiNet: ChessNet;
+  let opponentNet: ChessNet;
   let imitatorNet: ChessNet;
   try {
-    aiNet = await deserialize(weights);
+    opponentNet = await deserialize(weights);
   } catch (err) {
     const msg: TrainResponse = {
       kind: 'error',
-      message: `Failed to deserialize AI weights: ${err instanceof Error ? err.message : String(err)}`,
+      message: `Failed to deserialize opponent weights: ${err instanceof Error ? err.message : String(err)}`,
     };
     self.postMessage(msg);
     return;
@@ -124,7 +125,7 @@ self.onmessage = async (event: MessageEvent<TrainRequest>) => {
   try {
     imitatorNet = await deserialize(imitatorWeights);
   } catch (err) {
-    aiNet.dispose();
+    opponentNet.dispose();
     const msg: TrainResponse = {
       kind: 'error',
       message: `Failed to deserialize imitator weights: ${err instanceof Error ? err.message : String(err)}`,
@@ -133,7 +134,7 @@ self.onmessage = async (event: MessageEvent<TrainRequest>) => {
     return;
   }
 
-  const aiBuffer =
+  const opponentBuffer =
     replay.length > 0
       ? deserializeReplayBuffer(replay, replayCapacity)
       : createReplayBuffer(replayCapacity);
@@ -142,24 +143,24 @@ self.onmessage = async (event: MessageEvent<TrainRequest>) => {
       ? deserializeReplayBuffer(imitatorReplay, replayCapacity)
       : createReplayBuffer(replayCapacity);
 
-  // The user clicked "Train" — empty AI buffer is a hard error, but an
-  // empty imitator buffer is normal on a fresh profile and just gets
-  // silently skipped below.
-  if (aiBuffer.size() < batchSize) {
+  // The user clicked "Train" — empty opponent buffer is a hard error,
+  // but an empty imitator buffer is normal on a fresh profile and just
+  // gets silently skipped below.
+  if (opponentBuffer.size() < batchSize) {
     const msg: TrainResponse = {
       kind: 'error',
-      message: `AI replay buffer has ${aiBuffer.size()} examples, need at least ${batchSize}`,
+      message: `Opponent replay buffer has ${opponentBuffer.size()} examples, need at least ${batchSize}`,
     };
     self.postMessage(msg);
-    aiNet.dispose();
+    opponentNet.dispose();
     imitatorNet.dispose();
     return;
   }
 
-  let aiFinalStep = 0;
+  let opponentFinalStep = 0;
   let imitatorFinalStep = 0;
   try {
-    aiFinalStep = await trainNet(aiNet, aiBuffer, 'ai', batchSize, totalSteps, reportEvery);
+    opponentFinalStep = await trainNet(opponentNet, opponentBuffer, 'opponent', batchSize, totalSteps, reportEvery);
     if (!stopRequested) {
       imitatorFinalStep = await trainNet(
         imitatorNet,
@@ -176,7 +177,7 @@ self.onmessage = async (event: MessageEvent<TrainRequest>) => {
       message: `Training failed: ${err instanceof Error ? err.message : String(err)}`,
     };
     self.postMessage(msg);
-    aiNet.dispose();
+    opponentNet.dispose();
     imitatorNet.dispose();
     return;
   }
@@ -185,7 +186,7 @@ self.onmessage = async (event: MessageEvent<TrainRequest>) => {
   let finalWeights: Uint8Array;
   let finalImitatorWeights: Uint8Array;
   try {
-    finalWeights = await aiNet.serialize();
+    finalWeights = await opponentNet.serialize();
     finalImitatorWeights = await imitatorNet.serialize();
   } catch (err) {
     const msg: TrainResponse = {
@@ -193,12 +194,12 @@ self.onmessage = async (event: MessageEvent<TrainRequest>) => {
       message: `Failed to serialize weights after training: ${err instanceof Error ? err.message : String(err)}`,
     };
     self.postMessage(msg);
-    aiNet.dispose();
+    opponentNet.dispose();
     imitatorNet.dispose();
     return;
   }
 
-  const finalReplay = aiBuffer.serialize();
+  const finalReplay = opponentBuffer.serialize();
   const finalImitatorReplay = imitatorBuffer.serialize();
 
   const doneMsg: TrainResponse = {
@@ -207,7 +208,7 @@ self.onmessage = async (event: MessageEvent<TrainRequest>) => {
     replay: finalReplay,
     imitatorWeights: finalImitatorWeights,
     imitatorReplay: finalImitatorReplay,
-    finalStep: aiFinalStep,
+    finalStep: opponentFinalStep,
     imitatorFinalStep,
   };
 
@@ -223,6 +224,6 @@ self.onmessage = async (event: MessageEvent<TrainRequest>) => {
     ],
   });
 
-  aiNet.dispose();
+  opponentNet.dispose();
   imitatorNet.dispose();
 };
