@@ -7,85 +7,137 @@ import MctsExplainer from '../../../nn-chess/ui/MctsExplainer.tsx';
 // braces (e.g. `\sum_{a'}`), and writing them inline would force every
 // brace to be escaped as `&#123;`. Keeping the content in a single
 // `set:html` payload avoids that and keeps the math human-readable.
+//
+// Watch out for `${...}` literal sequences anywhere in these template
+// strings — that *would* be interpolated. None of the LaTeX here puts
+// `{` immediately after `$`, so we're safe; if you add new math be
+// careful to keep at least one character between `$` and `{`.
 const intro = String.raw`
   <h1>How nn-chess thinks: PUCT-style MCTS, sims/move, and cPuct</h1>
   <p><a href="/nn-chess">← back to play</a></p>
 
   <p>
     Every time the nn-chess opponent picks a move, it runs a small
-    <strong>Monte Carlo Tree Search</strong> (MCTS) rooted at the current
-    position. This page is a long-form, math-first explainer of what
-    that search does, why it does it that way, and what the two knobs
-    on the main page —
-    <em>sims/move</em> and <em>cPuct</em> — actually control. The end of
-    the page is an interactive walk-through of a mate-in-2 that uses
+    <strong><a href="https://en.wikipedia.org/wiki/Monte_Carlo_tree_search">Monte
+    Carlo Tree Search</a></strong> (MCTS) rooted at the current position.
+    The specific variant is called <strong>PUCT</strong> — "Predictor +
+    UCT," a bandit-style action-selection rule we'll define carefully in
+    §2. The two knobs the main page exposes,
+    <em>sims/move</em> and <em>cPuct</em>, are both parameters of that
+    rule. This page is a math-first walk-through of what the search
+    does, why it does it that way, and what those two knobs actually
+    control; the end of the page is an interactive mate-in-2 that uses
     your own trained networks to drive each MCTS call.
   </p>
 
   <h2>1. The shape of the search</h2>
+
   <p>
-    Classical full-width minimax explores every legal move to a fixed
-    depth and is hopeless for chess: with a branching factor around 35
-    and a value network costing real wall-clock time per evaluation,
-    even depth-6 minimax dwarfs the per-move budget we have in the
-    browser. MCTS gives up exhaustive coverage in exchange for a budget
-    we can dial: it spends $n$ simulations exploring the tree, and the
-    tree it builds is highly asymmetric — deep along promising lines,
-    shallow elsewhere.
+    Classical full-width
+    <a href="https://en.wikipedia.org/wiki/Minimax">minimax</a> explores
+    every legal move to a fixed depth and is hopeless for chess: with a
+    branching factor around 35 and a value network costing real
+    wall-clock time per evaluation, even depth-6 minimax dwarfs the
+    per-move budget we have in the browser. MCTS gives up exhaustive
+    coverage in exchange for a budget we can dial: it spends $n$
+    simulations exploring the tree, and the tree it builds is highly
+    asymmetric — deep along promising lines, shallow elsewhere.
   </p>
+
   <p>
-    The flavour we use is the <strong>PUCT</strong> variant from AlphaGo
-    Zero / AlphaZero, where a single neural network supplies both a
-    <em>prior policy</em> $P(s, a)$ — a probability distribution over
-    moves from each state $s$ — and a <em>value</em> $V(s)\in[-1, 1]$
-    estimating how good $s$ is for the side to move. The terminal
-    reward is fixed: $+1$ for the side that delivered checkmate, $-1$
-    for the side that was checkmated, $0$ for any draw. <em>That is the
-    only chess heuristic baked in.</em> Everything else has to be learnt
-    by the network from games.
+    Concretely, MCTS treats the game as a tree. A <strong>node</strong>
+    is a board position. An <strong>edge</strong> is a legal move
+    leading from one node to another; we'll usually write an edge as a
+    pair $(s, a)$ — "the action $a$ available at state $s$." The
+    <strong>root</strong> is the position we're choosing a move for. A
+    <strong>leaf</strong> is a node we haven't yet expanded — either
+    because it's terminal (game over) or because the search hasn't
+    spent a simulation on it yet. One "simulation" or "playout" is a
+    single walk from root to leaf plus an evaluation and a bookkeeping
+    pass back up the path.
+  </p>
+
+  <p>
+    The flavour of MCTS we use is the <strong>PUCT</strong> variant from
+    <a href="https://en.wikipedia.org/wiki/AlphaGo_Zero">AlphaGo
+    Zero</a><sup id="fnref-1"><a href="#fn-1">[1]</a></sup> and
+    <a href="https://en.wikipedia.org/wiki/AlphaZero">AlphaZero</a><sup
+    id="fnref-2"><a href="#fn-2">[2]</a></sup>. A
+    <em>single</em> neural network ("the net" — one set of weights,
+    two output heads) supplies:
+  </p>
+  <ul>
+    <li>a <em>prior policy</em> $P(s, a)$ — a probability distribution
+        over legal moves from $s$, produced by the policy head and
+        normalised with <a href="https://en.wikipedia.org/wiki/Softmax_function">softmax</a>;</li>
+    <li>a <em>value</em> $V(s) \in [-1, 1]$ — the value head's estimate
+        of how good $s$ is for whichever side is to move at $s$.</li>
+  </ul>
+  <p>
+    The only terminal-reward signal the search ever sees is fixed:
+    $+1$ if the side that just moved delivered checkmate, $-1$ if it
+    got checkmated, $0$ for any draw. <em>That is the only chess
+    heuristic baked in.</em> Everything else — piece values, tactics,
+    positional understanding — has to come out of the network from
+    games.
   </p>
 
   <p>One simulation has four phases, run repeatedly for the search budget:</p>
 
   <ol>
-    <li><strong>Selection.</strong> Starting at the root, descend through the
-        tree by repeatedly picking the edge with the highest PUCT score
-        (see below) until you reach a node that has either never been
-        expanded or that is a terminal state.</li>
-    <li><strong>Expansion.</strong> If the leaf is non-terminal, ask the
-        policy net for $P(\cdot \mid s)$ and $V(s)$. Mask $P$ to the
-        legal moves at $s$ and renormalise. Create one child edge per
-        legal move and store its prior.</li>
+    <li><strong>Selection.</strong> Starting at the root, descend through
+        the tree by repeatedly picking the edge with the highest PUCT
+        score (defined in §2) until you reach a node that's either
+        unexpanded (we've never asked the net about it) or terminal.</li>
+    <li><strong>Expansion.</strong> If the leaf is non-terminal, ask
+        the net for $P(\cdot \mid s)$ and $V(s)$. Mask $P$ to the legal
+        moves at $s$ and renormalise. Create one child edge per legal
+        move and store its prior.</li>
     <li><strong>Evaluation.</strong> Use $V(s)$ as the value to back up.
-        If the leaf is terminal, use the terminal reward instead — no
-        rollout, no playout policy. AlphaZero showed that rollouts are
-        not necessary once you have a competent value head.</li>
-    <li><strong>Backup.</strong> Walk back up the path you came down,
+        If the leaf is terminal, use the terminal reward instead.
+        Classical MCTS does an actual <em>rollout</em><sup
+        id="fnref-3"><a href="#fn-3">[3]</a></sup> here — it plays a
+        random or weakly-policy-driven game from the leaf to the end,
+        and backs up the win/loss. AlphaZero showed that once you have
+        a competent value head, the value head replaces what the rollout
+        used to estimate; no random play is needed at all.</li>
+    <li><strong>Backup.</strong> Walk back up the path you descended,
         incrementing visit counts and accumulating value along each
-        edge. The value flips sign at every step because each edge
-        crosses from one side to the other; what's good for one player
-        is bad for the other.</li>
+        edge. Because chess is
+        <a href="https://en.wikipedia.org/wiki/Zero-sum_game">zero-sum</a>
+        and turn-alternating, the value flips sign at every step — a
+        position worth $+0.4$ to me is worth $-0.4$ to my opponent, who
+        is to move one ply earlier. §3 makes this precise.</li>
   </ol>
 
   <p>
     After all simulations finish, the move chosen at the root is the
-    one with the most visits. The visit-count distribution itself is
-    also the policy target used to train the network (AlphaZero's
-    self-play loop pushes the policy net toward the improved policy
-    that MCTS produces from its priors).
+    one with the most visits. The visit-count distribution also doubles
+    as a <em>policy target</em> when the net is being trained: during
+    AlphaZero-style self-play the policy head is regressed toward
+    $\pi(a) \propto N(s, a)$, on the theory that the search produces an
+    improvement over the raw prior. We're not training on this page —
+    everything below is inference — but the same machinery feeds the
+    training step on the main page.
   </p>
 
   <h2>2. The PUCT formula in detail</h2>
 
   <p>
     Each edge $(s, a)$ in the search tree carries four numbers we
-    update over the search:
+    update as the search runs:
   </p>
   <ul>
-    <li>$P(s, a)$ — the prior from the policy net, fixed at expansion time.</li>
-    <li>$N(s, a)$ — visit count.</li>
-    <li>$W(s, a)$ — total backed-up value through this edge.</li>
-    <li>$Q(s, a) = W(s, a) / N(s, a)$ — average value when $N(s, a) > 0$, else $0$.</li>
+    <li>$P(s, a)$ — the prior from the net's policy head, fixed at
+        expansion time and not touched afterwards.</li>
+    <li>$N(s, a)$ — visit count: the number of simulations that have
+        descended through this edge so far.</li>
+    <li>$W(s, a)$ — total backed-up value through this edge (the sum
+        of the values each of those $N(s, a)$ simulations contributed
+        on their way up).</li>
+    <li>$Q(s, a) = W(s, a) / N(s, a)$ — the running average value
+        of this edge. Defined to be $0$ for edges that have never been
+        visited.</li>
   </ul>
 
   <p>Selection at $s$ picks the legal action $a$ that maximises:</p>
@@ -96,55 +148,64 @@ const intro = String.raw`
   $$
 
   <p>
-    where $N(s) = \sum_{a'} N(s, a')$. Both terms are interpretable:
+    where $N(s) = \sum_{a'} N(s, a')$ is the total visit count at the
+    parent node $s$ (the sum of $N$ over all the edges leaving it).
+    Both terms in the PUCT sum are interpretable:
   </p>
 
   <ul>
     <li>
-      <strong>Exploit.</strong> $Q(s, a)$ is just the average outcome we've
-      seen through this edge so far, in $[-1, 1]$ from the perspective
-      of the side to move at $s$. If the network thinks one edge
-      consistently wins, its $Q$ trends positive and the search
-      gravitates there.
+      <strong>Exploit.</strong> $Q(s, a)$ is the running average outcome
+      from this edge so far, in $[-1, 1]$ from the perspective of the
+      side to move at $s$. If the network keeps producing
+      side-to-move-wins signals through some edge, its $Q$ stays
+      positive and the search gravitates there.
     </li>
     <li>
-      <strong>Explore.</strong> $U(s, a)$ is large when (a) we have a high
-      prior — the policy net likes this move — and (b) we have not
-      visited it much yet. As $N(s, a) \to \infty$ for a particular
-      edge, its $U$ decays as $1/N(s, a)$ while $Q$ stays bounded; the
+      <strong>Explore.</strong> $U(s, a)$ is large when (a) the prior
+      is high — the policy head likes this move — and (b) we haven't
+      visited it much yet. As $N(s, a) \to \infty$ for one edge, its
+      $U$ decays as $1 / N(s, a)$ while $Q$ stays bounded; the
       exploration bonus eventually vanishes and selection is dominated
       by exploitation.
     </li>
   </ul>
 
   <p>
-    Why $\sqrt{N(s)}$ in the numerator? You can derive a closely
-    related bound from UCB1 for stochastic bandits, but the AlphaGo Zero
-    paper just settled on this form because it works: the search
-    distributes visits across edges in rough proportion to
+    Why $\sqrt{N(s)}$ in the explore bonus? It's a heuristic choice
+    from the AlphaGo Zero paper, loosely inspired by
+    <a href="https://en.wikipedia.org/wiki/Multi-armed_bandit#Upper_confidence_bound_(UCB)_algorithms">UCB1</a><sup
+    id="fnref-4"><a href="#fn-4">[4]</a></sup> — the canonical
+    exploration bonus for stochastic
+    <a href="https://en.wikipedia.org/wiki/Multi-armed_bandit">multi-armed
+    bandit</a> problems. UCB1's bonus is $\sqrt{\log N(s) / N(s, a)}$,
+    derived from a Chernoff-style confidence bound on the empirical
+    mean of an arm; PUCT swaps the $\log$ for a plain $\sqrt{N(s)}$ and
+    multiplies the whole thing by the policy prior $P(s, a)$ so
+    high-prior moves get the bulk of early exploration. The net effect:
+    visits distribute roughly in proportion to
     $\sqrt{N(s)} \cdot P(s, a)$ early on (when $N(s, a)$ is small and
-    $Q$ is noisy), then concentrates on whichever edges develop a high
-    $Q$. The numerator grows slowly enough that the explore bonus
-    doesn't blow up, but fast enough that several alternatives still
-    get sampled per node.
+    $Q$ is noisy), then concentrate on whichever edges develop a high
+    $Q$.
   </p>
 
   <p>
     All ties on $Q + U$ are broken deterministically (high prior first,
     then lexicographic UCI). Search is otherwise purely deterministic
-    once the policy net and rng seed are fixed — see the determinism
-    test in <code>core/mcts/mcts.test.ts</code>.
+    once the network weights and rng seed are fixed — see the
+    determinism test in <code>core/mcts/mcts.test.ts</code>.
   </p>
 
   <h2>3. The backup, with sign-flipping</h2>
 
   <p>
     During backup, the value $v$ produced at the leaf travels back up
-    the descent path. Two-player, zero-sum games are an alternating
-    setting: positions on adjacent plies belong to opposite players, so
-    a value that is good for the leaf's mover is bad for the parent's
-    mover by exactly the same amount. We encode this by negating $v$
-    every step:
+    the descent path. Because chess is zero-sum and turn-alternating,
+    adjacent plies belong to opposite players: if the leaf is worth
+    $+0.7$ to the side to move <em>there</em>, the same outcome is
+    worth $-0.7$ to its parent's mover, $+0.7$ to the grandparent's
+    mover, and so on. So at each step up the path we negate $v$ before
+    crediting it to the edge:
   </p>
 
   $$
@@ -156,12 +217,20 @@ const intro = String.raw`
   <p>
     This convention keeps every $Q(s, a)$ in the tree measured from the
     side-to-move's perspective at $s$, which is exactly what selection
-    needs to compare candidate moves consistently. The terminal handling
-    in <code>core/mcts/index.ts</code> does the same flip: if a child
-    state is terminal, the value backed up at that child is
-    $-\textsf{terminalValueForMover}(s)$ — because
-    <code>terminalValueForMover</code> answers from the perspective of
-    the side that <em>just moved</em>, not the side to move now.
+    needs to compare candidate moves consistently.
+  </p>
+
+  <p>
+    Terminal leaves get the same flip in disguise. If the leaf is a
+    checkmate, the side that just moved won — so $+1$ for them, $-1$
+    for the side to move <em>at the leaf</em> (the side that's mated).
+    Our backup convention measures everything from the side-to-move's
+    perspective, so the value we want to push up is the second of those
+    two — $-1$ at the leaf. The helper <code>terminalValueForMover</code>
+    in <code>core/mcts/index.ts</code> answers from the just-moved
+    side's perspective (because that's the convenient one for the rules
+    module), so the search code negates it once before sending it up
+    the path.
   </p>
 
   <h2>4. What sims/move actually controls</h2>
@@ -176,32 +245,41 @@ const intro = String.raw`
     <li>
       <strong>Visit distribution sharpens.</strong> In the limit
       $n \to \infty$, MCTS's visit-count distribution
-      $\pi_n(a) = N(s, a) / n$ approaches the distribution that puts
-      all its mass on the optimal action under the value model. AlphaZero
-      then samples training-time moves as $\pi(a) \propto N(s, a)^{1/T}$
-      for temperature $T$, but our deployed opponent uses $T = 0$
-      (greedy argmax) so what matters is just which edge wins the
-      visit count.
+      $\pi_n(a) = N(s, a) / n$ concentrates on the action that maximises
+      the average backed-up $Q$ — the best move <em>according to the
+      value head as currently trained</em>, not the move that is best
+      in some game-theoretic ground-truth sense. (At training time,
+      AlphaZero sampled training moves with a temperature,
+      $\pi_T(a) \propto N(s, a)^{1/T}$, to keep the data generator
+      exploring; we play greedy at inference, so $T = 0$ and we just
+      take the argmax visit count.<sup id="fnref-5"><a
+      href="#fn-5">[5]</a></sup>)
     </li>
     <li>
       <strong>Forced mates become discoverable.</strong> A mate-in-$k$
       from the side to move requires the search to reach a terminal
       mating leaf along at least one defensive subtree at every
-      intermediate ply. With branching factor $b$, the worst-case
-      number of simulations to discover a mate-in-$k$ from a fresh-init
-      net is roughly $b^k$ — the search has to fail down many wrong
-      subtrees before the terminal $+1$ propagates back to the root.
-      In practice the search is much more efficient than $b^k$ because
-      PUCT clusters visits on a small subset of moves at each ply, but
-      this exponential is why doubling sims/move has such an outsized
-      effect on tactical strength.
+      intermediate ply. With branching factor $b$ and uniform (cold-
+      start) priors, PUCT spreads visits roughly $b$-ways at each ply,
+      so reaching one specific terminal leaf $k$ plies down takes on
+      the order of $b^k$ simulations before the $+1$ first propagates
+      back to the root.<sup id="fnref-6"><a href="#fn-6">[6]</a></sup>
+      In practice the search is much more efficient than this bound
+      because PUCT clusters visits on a small subset of moves at each
+      ply, and $Q$ shapes that clustering as soon as the first terminal
+      leaves are touched; but the exponential is why doubling sims/move
+      has such an outsized effect on tactical strength.
     </li>
     <li>
-      <strong>Cost is linear.</strong> Each simulation costs one
-      forward pass of the policy net (in the worst case — repeated
-      states are cached within a single search via
-      <code>repetitionKey</code>) plus $O(\text{depth})$ tree
-      bookkeeping. Doubling sims/move doubles wall-clock per move.
+      <strong>Cost is linear in sims.</strong> Each simulation costs
+      one forward pass of the network (in the worst case — repeated
+      states within a single search hit an in-memory cache keyed on
+      <code>repetitionKey</code>) plus a few arithmetic ops per node on
+      the descent path. The descent path's length is bounded by however
+      deep PUCT decides to go, which in our cold-start regime rarely
+      passes a few plies before hitting an unexpanded leaf, so the
+      per-simulation cost is dominated by the forward pass. Doubling
+      sims/move therefore doubles wall-clock per move.
     </li>
     <li>
       <strong>Diminishing returns once the search is informed.</strong>
@@ -223,13 +301,16 @@ const intro = String.raw`
 
   <ul>
     <li>
-      <strong>$c_{\text{puct}} \to 0$:</strong> the explore term vanishes
-      and selection becomes "pick the edge with the highest $Q$, breaking
-      ties on $N$." With $Q$ initialised to $0$ everywhere, this
-      degenerates to "always pick the same first-tried move," because
-      after one visit that edge has a nonzero $Q$ (from its child's $V$)
-      and every other edge has $Q = 0$. Useful only after the search has
-      already converged.
+      <strong>$c_{\text{puct}} \to 0$:</strong> the explore term
+      vanishes and selection becomes "pick the edge with the highest
+      $Q$, breaking ties on $N$, then on prior, then lexicographically."
+      With $Q$ initialised to $0$ everywhere, every edge ties at the
+      root on the first pass; the prior-based tiebreak picks the
+      highest-prior move first. Once that one edge has been visited,
+      its child's $V$ flows up and gives it a nonzero $Q$, which then
+      beats every other edge's $Q = 0$ forever — so the search locks
+      onto a single line and never reconsiders. Useful only after the
+      search has already converged via a nonzero $c_{\text{puct}}$.
     </li>
     <li>
       <strong>$c_{\text{puct}} \to \infty$:</strong> $Q$ becomes
@@ -245,12 +326,12 @@ const intro = String.raw`
     AlphaZero used $c_{\text{puct}} = 1.5$ for chess; that's the
     nn-chess default. The right value depends on (a) the value-head
     scale (ours is $\tanh$, so $Q \in [-1, 1]$) and (b) how peaked the
-    prior is. A near-uniform prior — which is what you get from a
-    cold-start net — calls for a smaller $c_{\text{puct}}$, because $U$
-    is then much flatter and adding more of it just spreads visits
-    across edges $Q$ has already ranked. A very peaked prior calls for
-    a larger $c_{\text{puct}}$ to overcome the policy's confidence when
-    it's wrong.
+    prior is. A near-uniform prior — what you get from a cold-start
+    net — calls for a smaller $c_{\text{puct}}$, because $U$ is then
+    much flatter and adding more of it just spreads visits across edges
+    $Q$ has already ranked. A very peaked prior calls for a larger
+    $c_{\text{puct}}$ to overcome the policy's confidence when it's
+    wrong.
   </p>
 
   <p>
@@ -267,16 +348,18 @@ const intro = String.raw`
   <h2>6. Dirichlet noise (briefly)</h2>
 
   <p>
-    The MCTS module supports root-only Dirichlet noise:
+    The MCTS module supports root-only
+    <a href="https://en.wikipedia.org/wiki/Dirichlet_distribution">Dirichlet</a>
+    noise:
     $\tilde P(s_0, a) = (1 - \varepsilon) P(s_0, a) + \varepsilon \eta_a$
     where $\eta \sim \mathrm{Dir}(\alpha)$. This is how AlphaZero forces
     a bit of exploration during self-play (it keeps the data generator
     from collapsing onto a single line). We use it in self-play games
     against the imitator with the standard chess values
-    $\alpha = 0.3$, $\varepsilon = 0.25$; we do <em>not</em> use it
-    during play against the user — at inference time we want the best
-    move, not an exploration-noised one. See
-    <code>SELFPLAY_SEARCH</code> in
+    $\alpha = 0.3$, $\varepsilon = 0.25$<sup id="fnref-7"><a
+    href="#fn-7">[7]</a></sup>; we do <em>not</em> use it during play
+    against the user — at inference time we want the best move, not an
+    exploration-noised one. See <code>SELFPLAY_SEARCH</code> in
     <code>nn-chess/ui/opponent-config.ts</code> for where this is wired
     in. The demo below also leaves Dirichlet noise off so the visit
     counts you see are pure PUCT.
@@ -350,6 +433,89 @@ const outro = String.raw`
       defaults for sims/move, cPuct, and Dirichlet noise live.
     </li>
   </ul>
+
+  <h2>Footnotes &amp; further reading</h2>
+
+  <ol class="footnotes" style="font-size: 0.92em; color: #333;">
+    <li id="fn-1" style="margin-bottom: 8px;">
+      Silver et al., <em>Mastering the game of Go without human
+      knowledge</em>, Nature 550, 354–359 (2017).
+      <a href="https://www.nature.com/articles/nature24270">Nature</a>;
+      the paper that introduced AlphaGo Zero and the PUCT formula
+      we use here.
+      <a href="#fnref-1" aria-label="Return to text">↩</a>
+    </li>
+    <li id="fn-2" style="margin-bottom: 8px;">
+      Silver et al., <em>A general reinforcement learning algorithm
+      that masters chess, shogi, and Go through self-play</em>, Science
+      362, 1140–1144 (2018);
+      <a href="https://arxiv.org/abs/1712.01815">arXiv:1712.01815</a>.
+      The AlphaZero paper, which carries the same PUCT machinery over
+      to chess (and is where the $c_{\text{puct}} = 1.5$ default comes
+      from).
+      <a href="#fnref-2" aria-label="Return to text">↩</a>
+    </li>
+    <li id="fn-3" style="margin-bottom: 8px;">
+      The original MCTS line of work — Coulom (2006), Kocsis &amp;
+      Szepesvári (2006), and the broader UCT family — relies on these
+      random rollouts and works without a learned value head at all.
+      See Browne et al., <em>A Survey of Monte Carlo Tree Search
+      Methods</em>, IEEE Transactions on Computational Intelligence and
+      AI in Games (2012),
+      <a href="https://ieeexplore.ieee.org/document/6145622">DOI:
+      10.1109/TCIAIG.2012.2186810</a>, for the pre-AlphaGo state of the
+      art. The Wikipedia page on
+      <a href="https://en.wikipedia.org/wiki/Monte_Carlo_tree_search#Principle_of_operation">MCTS</a>
+      walks through the rollout-based version step by step.
+      <a href="#fnref-3" aria-label="Return to text">↩</a>
+    </li>
+    <li id="fn-4" style="margin-bottom: 8px;">
+      Auer, Cesa-Bianchi &amp; Fischer, <em>Finite-time Analysis of the
+      Multiarmed Bandit Problem</em>, Machine Learning 47, 235–256
+      (2002),
+      <a href="https://link.springer.com/article/10.1023/A:1013689704352">Springer</a>.
+      The paper that derives UCB1. For PUCT specifically, the relevant
+      precursor is Rosin's <em>Multi-armed bandits with episode
+      context</em> (2011),
+      <a href="https://link.springer.com/article/10.1007/s10472-011-9258-6">Springer</a>,
+      which introduces the prior-weighted variant the AlphaGo Zero
+      paper builds on.
+      <a href="#fnref-4" aria-label="Return to text">↩</a>
+    </li>
+    <li id="fn-5" style="margin-bottom: 8px;">
+      AlphaZero used $T = 1$ for the first $30$ plies of each self-play
+      game (so the data generator could see varied openings) and then
+      $T \to 0$ for the rest of the game. The
+      <code>SELFPLAY_TEMPERATURE_PLIES</code> constant in
+      <code>nn-chess/ui/opponent-config.ts</code> follows the same
+      convention. <code>nn-chess</code>'s self-play uses $T = 1$ during
+      that opening window and greedy after; the human-play opponent is
+      always greedy.
+      <a href="#fnref-5" aria-label="Return to text">↩</a>
+    </li>
+    <li id="fn-6" style="margin-bottom: 8px;">
+      This is a very loose worst-case bound. With a uniform prior and
+      no value-head signal, a fresh search has nothing to push visits
+      one way or the other, so all $b^k$ leaves $k$ plies down are
+      roughly equally likely to be reached first. As soon as a few
+      terminal leaves <em>are</em> reached, the resulting $+1$/$-1$
+      values flow up through $Q$ and bias selection sharply, which is
+      why the empirical sims-to-mate is much smaller than $b^k$ in
+      practice.
+      <a href="#fnref-6" aria-label="Return to text">↩</a>
+    </li>
+    <li id="fn-7" style="margin-bottom: 8px;">
+      Dirichlet noise is applied <em>only</em> at the root and never
+      inside the tree. Adding it deeper would corrupt the recursive
+      structure of $Q$ — child evaluations would no longer be reusable
+      for selection at the same state in a future simulation, because
+      the priors that determined their visit counts would have been
+      different. Restricting noise to the root keeps the per-state
+      tree consistent while still letting the data generator wander
+      across distinct opening choices.
+      <a href="#fnref-7" aria-label="Return to text">↩</a>
+    </li>
+  </ol>
 `;
 ---
 <BaseLayout
