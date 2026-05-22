@@ -111,7 +111,12 @@ export interface Opponent {
   /** Pick a move for the opponent to play from `state`. */
   selectMove(
     state: GameState,
-  ): Promise<{ move: Move; rootValue: number; visitCounts: Map<Move, number> }>;
+  ): Promise<{
+    move: Move;
+    rootValue: number;
+    visitCounts: Map<Move, number>;
+    priorPolicy: Map<Move, number>;
+  }>;
 
   /**
    * Record a complete game. Converts move records into TrainingExamples
@@ -356,7 +361,12 @@ export function createOpponent(opts: CreateOpponentOptions): Opponent {
 
   const selectMove = async (
     state: GameState,
-  ): Promise<{ move: Move; rootValue: number; visitCounts: Map<Move, number> }> => {
+  ): Promise<{
+    move: Move;
+    rootValue: number;
+    visitCounts: Map<Move, number>;
+    priorPolicy: Map<Move, number>;
+  }> => {
     const policy = policyFromNet(net);
 
     const searchConfig: SearchConfig = {
@@ -368,12 +378,12 @@ export function createOpponent(opts: CreateOpponentOptions): Opponent {
     };
 
     const result = await search(state, policy, searchConfig);
-    const { rootValue, visitCounts } = result;
+    const { rootValue, visitCounts, priorPolicy } = result;
 
     const temperature = config.temperature ?? 0;
-    const move = pickMove(visitCounts, result.priorPolicy, temperature, config.rng);
+    const move = pickMove(visitCounts, priorPolicy, temperature, config.rng);
 
-    return { move, rootValue, visitCounts };
+    return { move, rootValue, visitCounts, priorPolicy };
   };
 
   const recordGameResult = (

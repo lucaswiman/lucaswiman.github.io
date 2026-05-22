@@ -7,6 +7,7 @@ import type { SelfPlayPanelHandle } from './SelfPlayPanel.js';
 import { EndgameGymPanel } from './EndgameGymPanel.js';
 import { TrainingLog, useTrainingLog } from './TrainingLog.js';
 import { TrainingStatsPanel } from './TrainingStats.js';
+import { LastMoveMcts } from './LastMoveMcts.js';
 import {
   type NetStats,
   emptyNetStats,
@@ -370,12 +371,10 @@ export default function Game() {
 
     const capturedState = session.state;
 
-    opponent.selectMove(capturedState).then(({ move, rootValue, visitCounts }) => {
+    opponent.selectMove(capturedState).then(({ move, rootValue, visitCounts, priorPolicy }) => {
       opponentMoveInFlight.current = false;
 
-      // priorPolicy is not exposed by Opponent.selectMove; leave it empty so the
-      // inspector's prior% column reads 0 until core/ is extended.
-      setLastSearch({ bestMove: move, rootValue, visitCounts, priorPolicy: new Map() });
+      setLastSearch({ bestMove: move, rootValue, visitCounts, priorPolicy });
 
       const record: GameMoveRecord = {
         features: encodeState(capturedState),
@@ -803,6 +802,8 @@ export default function Game() {
         onMove={handleMove}
         boardOrientation={humanIsWhite ? 'white' : 'black'}
       />
+
+      <LastMoveMcts lastSearch={lastSearch} />
 
       {session.over && (
         <div
