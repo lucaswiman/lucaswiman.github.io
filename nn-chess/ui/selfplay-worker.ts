@@ -80,6 +80,7 @@ self.onmessage = async (event: MessageEvent<SelfPlayRequest>) => {
     temperaturePlies,
     temperature,
     startingFens,
+    previewEnabled,
   } = req;
 
   // Pre-parse the curriculum pool once so we don't re-tokenize the same
@@ -195,17 +196,19 @@ self.onmessage = async (event: MessageEvent<SelfPlayRequest>) => {
         };
         self.postMessage(msg);
       },
-      onPly: (gameIndex, info) => {
-        const msg: SelfPlayResponse = {
-          kind: 'ply',
-          gameIndex,
-          opponentColor: info.opponentColor,
-          plyIndex: info.plyIndex,
-          fen: info.fen,
-          lastMove: info.lastMove,
-        };
-        self.postMessage(msg);
-      },
+      onPly: previewEnabled
+        ? (gameIndex, info) => {
+            const msg: SelfPlayResponse = {
+              kind: 'ply',
+              gameIndex,
+              opponentColor: info.opponentColor,
+              plyIndex: info.plyIndex,
+              fen: info.fen,
+              lastMove: info.lastMove,
+            };
+            self.postMessage(msg);
+          }
+        : undefined,
     });
 
     games = batchResult.games;
@@ -339,6 +342,7 @@ async function handleGym(
     gradientBatchSize,
     temperaturePlies,
     temperature,
+    previewEnabled,
   } = req;
 
   if (scenarios.length === 0) {
@@ -435,17 +439,19 @@ async function handleGym(
         };
         self.postMessage(msg);
       },
-      onPly: (info) => {
-        const msg: SelfPlayResponse = {
-          kind: 'ply',
-          gameIndex: info.scenarioIdx * maxGamesPerScenario + info.gameInScenario,
-          opponentColor: info.opponentColor,
-          plyIndex: info.plyIndex,
-          fen: info.fen,
-          lastMove: info.lastMove,
-        };
-        self.postMessage(msg);
-      },
+      onPly: previewEnabled
+        ? (info) => {
+            const msg: SelfPlayResponse = {
+              kind: 'ply',
+              gameIndex: info.scenarioIdx * maxGamesPerScenario + info.gameInScenario,
+              opponentColor: info.opponentColor,
+              plyIndex: info.plyIndex,
+              fen: info.fen,
+              lastMove: info.lastMove,
+            };
+            self.postMessage(msg);
+          }
+        : undefined,
     });
 
     scenariosConverted = gymResult.scenariosConverted;

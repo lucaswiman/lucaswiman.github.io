@@ -55,6 +55,14 @@ export interface EndgameGymPanelProps {
   storage: BlobStorage;
   /** Reload both nets from storage after the worker writes new weights. */
   onOpponentRefresh: () => Promise<void>;
+  /**
+   * When true the worker emits per-ply messages and the panel renders a
+   * live board for the in-flight game. When false the worker skips the
+   * per-ply postMessage and no board is rendered — saves compute on
+   * long gym runs.
+   */
+  previewEnabled: boolean;
+  onPreviewEnabledChange: (enabled: boolean) => void;
   /** MCTS sims/move — sourced from the in-game slider. */
   simulations: number;
 }
@@ -90,6 +98,8 @@ export function EndgameGymPanel({
   imitator,
   storage,
   onOpponentRefresh,
+  previewEnabled,
+  onPreviewEnabledChange,
   simulations,
 }: EndgameGymPanelProps) {
   const [categoryId, setCategoryId] = useState<string>('presets');
@@ -184,6 +194,7 @@ export function EndgameGymPanel({
         gradientBatchSize: SELFPLAY_GRADIENT_BATCH,
         temperaturePlies: SELFPLAY_TEMPERATURE_PLIES,
         temperature: SELFPLAY_TEMPERATURE,
+        previewEnabled,
       },
       (game) => {
         setStats(prev => prev === null ? prev : {
@@ -268,7 +279,7 @@ export function EndgameGymPanel({
         }
       },
     );
-  }, [opponent, imitator, storage, onOpponentRefresh, simulations, category, maxGamesPerScenario]);
+  }, [opponent, imitator, storage, onOpponentRefresh, simulations, category, maxGamesPerScenario, previewEnabled]);
 
   const handleStop = useCallback(() => {
     clientRef.current?.stop();
@@ -335,6 +346,15 @@ export function EndgameGymPanel({
           {category.description}
         </div>
 
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9em' }}>
+          <input
+            type="checkbox"
+            checked={previewEnabled}
+            onChange={e => onPreviewEnabledChange(e.target.checked)}
+          />
+          Preview training (render live board — turn off to save compute)
+        </label>
+
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
           <button
             type="button"
@@ -364,7 +384,7 @@ export function EndgameGymPanel({
           </div>
         )}
 
-        {live !== null && <LiveBoard live={live} />}
+        {previewEnabled && live !== null && <LiveBoard live={live} />}
 
         {recentOutcomes.length > 0 && (
           <div style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>

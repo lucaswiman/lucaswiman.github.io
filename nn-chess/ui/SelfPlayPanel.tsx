@@ -104,6 +104,13 @@ export interface SelfPlayPanelProps {
   autoEnabled: boolean;
   onAutoEnabledChange: (enabled: boolean) => void;
   /**
+   * When true the worker emits per-ply messages and the panel renders
+   * a live board for the in-flight game. When false neither happens,
+   * saving the per-ply FEN parse + Board re-render during long runs.
+   */
+  previewEnabled: boolean;
+  onPreviewEnabledChange: (enabled: boolean) => void;
+  /**
    * MCTS sims/move to use for self-play. Sourced from the same slider
    * that controls the in-game opponent so a single knob covers both.
    * Defaults from `SELFPLAY_SEARCH.simulations` are no longer applied
@@ -150,7 +157,17 @@ interface RunBatchOutcome {
 
 export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>(
   function SelfPlayPanel(
-    { opponent, imitator, storage, onOpponentRefresh, autoEnabled, onAutoEnabledChange, simulations },
+    {
+      opponent,
+      imitator,
+      storage,
+      onOpponentRefresh,
+      autoEnabled,
+      onAutoEnabledChange,
+      previewEnabled,
+      onPreviewEnabledChange,
+      simulations,
+    },
     ref,
   ) {
     const [mode, setMode] = useState<Mode>('fixed');
@@ -261,6 +278,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               temperaturePlies: SELFPLAY_TEMPERATURE_PLIES,
               temperature: SELFPLAY_TEMPERATURE,
               startingFens,
+              previewEnabled,
             },
             (game) => {
               collectedResults.push(game.opponentResult);
@@ -335,7 +353,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
           );
         });
       },
-      [opponent, imitator, storage, onOpponentRefresh, curriculumId, simulations],
+      [opponent, imitator, storage, onOpponentRefresh, curriculumId, simulations, previewEnabled],
     );
 
     // "Until opponent wins a game" loop: fire batches back-to-back and
@@ -547,6 +565,15 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
             Auto-run after each game
           </label>
 
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9em' }}>
+            <input
+              type="checkbox"
+              checked={previewEnabled}
+              onChange={e => onPreviewEnabledChange(e.target.checked)}
+            />
+            Preview training (render live board — turn off to save compute)
+          </label>
+
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
             <button
               type="button"
@@ -566,7 +593,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
             </button>
           </div>
 
-          {livePly !== null && (
+          {previewEnabled && livePly !== null && (
             <LiveBoard livePly={livePly} />
           )}
 

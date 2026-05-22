@@ -94,6 +94,13 @@ export type SelfPlayRequest =
        * position. Used to drive the endgame-curriculum self-play mode.
        */
       startingFens?: string[];
+      /**
+       * When false (or omitted), the worker suppresses per-ply `ply`
+       * messages so the main thread isn't parsing a FEN and re-rendering
+       * the board on every move. The UI sets this when the "Preview
+       * training" toggle is on.
+       */
+      previewEnabled?: boolean;
     }
   | {
       // Endgame gym: loop through decided positions with the opponent
@@ -118,6 +125,8 @@ export type SelfPlayRequest =
       gradientBatchSize: number;
       temperaturePlies?: number;
       temperature?: number;
+      /** See the `start` variant — same semantics for gym runs. */
+      previewEnabled?: boolean;
     }
   | { kind: 'stop' };
 

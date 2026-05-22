@@ -28,6 +28,7 @@ import {
   loadOpponentFromStorage,
   loadPlayerImitatorFromStorage,
   AUTO_SELFPLAY_PREF_KEY,
+  PREVIEW_TRAINING_PREF_KEY,
 } from './opponent-config.js';
 import { ENDGAME_PRESETS, ENDGAME_PRESETS_BY_ID } from './endgame-presets.js';
 import {
@@ -87,6 +88,10 @@ export default function Game() {
   // persisted preference (loaded asynchronously below) overrides this
   // once it lands.
   const [autoSelfPlay, setAutoSelfPlay] = useState(true);
+  // Default true to match the prior behaviour of always rendering the
+  // live training board; the persisted value (loaded below) overrides
+  // this once it lands.
+  const [previewTraining, setPreviewTraining] = useState(true);
   const [simulations, setSimulations] = useState(OPPONENT_CONFIG.simulations);
   // Gates the "persist session on change" effect: we only start writing
   // after the load attempt finishes, so the initial in-memory state
@@ -201,6 +206,22 @@ export default function Game() {
   const handleAutoSelfPlayChange = useCallback((enabled: boolean) => {
     setAutoSelfPlay(enabled);
     void putJson(storage, AUTO_SELFPLAY_PREF_KEY, { enabled });
+  }, [storage]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getJson<{ enabled: boolean }>(storage, PREVIEW_TRAINING_PREF_KEY)
+      .then(saved => {
+        if (cancelled || saved === null) return;
+        setPreviewTraining(saved.enabled);
+      })
+      .catch(() => { /* preference missing or corrupt — keep default */ });
+    return () => { cancelled = true; };
+  }, [storage]);
+
+  const handlePreviewTrainingChange = useCallback((enabled: boolean) => {
+    setPreviewTraining(enabled);
+    void putJson(storage, PREVIEW_TRAINING_PREF_KEY, { enabled });
   }, [storage]);
 
   useEffect(() => {
@@ -757,6 +778,8 @@ export default function Game() {
         onOpponentRefresh={handleOpponentRefresh}
         autoEnabled={autoSelfPlay}
         onAutoEnabledChange={handleAutoSelfPlayChange}
+        previewEnabled={previewTraining}
+        onPreviewEnabledChange={handlePreviewTrainingChange}
         simulations={simulations}
       />
 
@@ -765,6 +788,8 @@ export default function Game() {
         imitator={imitator}
         storage={storage}
         onOpponentRefresh={handleOpponentRefresh}
+        previewEnabled={previewTraining}
+        onPreviewEnabledChange={handlePreviewTrainingChange}
         simulations={simulations}
       />
 
