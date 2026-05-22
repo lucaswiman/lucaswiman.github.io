@@ -1,10 +1,10 @@
-// Persists the in-progress user-vs-agent game across page reloads.
+// Persists the in-progress user-vs-opponent game across page reloads.
 //
 // The persisted blob is intentionally tiny: a starting FEN plus the
 // list of UCI moves played from there, alongside the UI's setup/color/
 // puzzle metadata. On restore we replay the moves through the rules
 // module to rebuild a `GameState` and re-encode the per-move features
-// the agent would have captured live — i.e. we never persist the
+// the opponent would have captured live — i.e. we never persist the
 // Float32Array tensors, which would balloon the blob and tie the
 // persistence format to the encoding version.
 //
@@ -24,7 +24,8 @@ import {
 } from '../core/rules/index.js';
 import type { GameState, Move, Outcome } from '../core/rules/index.js';
 import { encodeState } from '../core/encoding/index.js';
-import type { GameMoveRecord } from '../core/agent/index.js';
+import type { GameMoveRecord } from '../core/opponent/index.js';
+import { legalMoveIndicesFor } from '../core/opponent/index.js';
 import {
   getJson,
   putJson,
@@ -68,6 +69,7 @@ export function restoreSession(saved: PersistedSession): RestoredSession {
       features: encodeState(state),
       move,
       sideToMove: sideToMove(state),
+      legalMoveIndices: legalMoveIndicesFor(state),
     });
     state = applyMove(state, move);
   }

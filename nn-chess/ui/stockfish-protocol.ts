@@ -12,12 +12,12 @@
  * The lite single-threaded variant is used because:
  *  - No SharedArrayBuffer / COOP/COEP headers required (single-threaded WASM).
  *  - ~7 MB vs ~110 MB for the full engine — acceptable load time.
- *  - Still far stronger than our nn-chess agent at any Skill Level.
- *  - The "Skill Level" UCI option weakens it to give the agent a chance.
+ *  - Still far stronger than our nn-chess opponent at any Skill Level.
+ *  - The "Skill Level" UCI option weakens it to give the opponent a chance.
  */
 
 export interface StockfishConfig {
-  /** Skill Level 0–20; default 5. Lower = weaker, giving the agent a chance. */
+  /** Skill Level 0–20; default 5. Lower = weaker, giving the opponent a chance. */
   skill?: number;
   /** Move time in milliseconds; default 100. Fast games → volume of data. */
   movetimeMs?: number;

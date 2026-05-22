@@ -13,8 +13,8 @@ describe('endgame presets', () => {
 
   it('side-to-move matches the winning side', () => {
     // For the curated presets the winning side moves first — otherwise the
-    // human (playing the winning side) would have to wait for an agent move
-    // from a position where the agent has no idea what to do.
+    // human (playing the winning side) would have to wait for an opponent move
+    // from a position where the opponent has no idea what to do.
     for (const preset of ENDGAME_PRESETS) {
       const state = fromFen(preset.fen);
       expect(sideToMove(state), `${preset.id}: winning side should move first`).toBe(

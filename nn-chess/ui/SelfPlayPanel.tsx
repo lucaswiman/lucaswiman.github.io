@@ -1,7 +1,8 @@
-// SelfPlayPanel — controls for running self-play games between the AI
-// and the player imitator. Each batch trains the imitator on the user's
-// recorded moves, generates AlphaZero-style examples by playing the
-// updated imitator, then takes gradient steps on the AI net.
+// SelfPlayPanel — controls for running self-play games between the
+// opponent and the player imitator. Each batch trains the imitator on
+// the user's recorded moves, generates AlphaZero-style examples by
+// playing the updated imitator, then takes gradient steps on the
+// opponent net.
 //
 // The heavy lifting (MCTS + NN forward/backward) runs in a Web Worker
 // via SelfPlayClient; this panel is pure UI plumbing. The same client
@@ -9,10 +10,10 @@
 // — Game.tsx pokes us through the imperative `triggerAutoBatch` handle
 // so there's exactly one worker code path in the app.
 //
-// "Until AI wins a game" mode keeps firing batches in a loop and stops
-// as soon as the AI wins at least one game against the imitator (or the
-// user clicks Stop, or we hit the hard cap). The per-batch worker call
-// is unchanged; the loop logic lives in this panel.
+// "Until opponent wins a game" mode keeps firing batches in a loop and
+// stops as soon as the opponent wins at least one game against the
+// imitator (or the user clicks Stop, or we hit the hard cap). The
+// per-batch worker call is unchanged; the loop logic lives in this panel.
 //
 // The Stop button aborts between games via the worker's `stop`
 // message; abort between MCTS plies is handled inside the worker.
@@ -25,10 +26,10 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { Agent } from '../core/agent/index.js';
+import type { Opponent } from '../core/opponent/index.js';
 import type { PlayerImitator } from '../core/imitator/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
-import { AGENT_STORAGE_KEYS } from '../core/agent/index.js';
+import { OPPONENT_STORAGE_KEYS } from '../core/opponent/index.js';
 import { IMITATOR_STORAGE_KEYS } from '../core/imitator/index.js';
 import { fromFen, type GameState } from '../core/rules/index.js';
 import Board from './Board.js';
@@ -42,21 +43,21 @@ import {
   SELFPLAY_TEMPERATURE_PLIES,
   SELFPLAY_TEMPERATURE,
   REPLAY_CAPACITY,
-} from './agent-config.js';
+} from './opponent-config.js';
 import { ENDGAME_PRESETS } from './endgame-presets.js';
 import { LICHESS_CATEGORIES } from './lichess-endgames.js';
 
 /**
- * Hard cap on the "Until AI wins a game" loop so a stuck run can't keep
- * training forever in the background. Tuned for one user-session's
- * worth of patience: at ~5s per game and 3 games per batch that's
- * roughly 15 minutes of wall time before we give up.
+ * Hard cap on the "Until opponent wins a game" loop so a stuck run
+ * can't keep training forever in the background. Tuned for one
+ * user-session's worth of patience: at ~5s per game and 3 games per
+ * batch that's roughly 15 minutes of wall time before we give up.
  */
 const UNTIL_WIN_HARD_CAP = 200;
 
 type Mode = 'fixed' | 'until-win';
 
-type AiResult = 'win' | 'loss' | 'draw';
+type OpponentResult = 'win' | 'loss' | 'draw';
 
 /**
  * Curriculum dropdown options. `default` keeps the existing
@@ -95,16 +96,16 @@ const CURRICULUM_OPTIONS = buildCurriculumOptions();
 const CURRICULUM_OPTIONS_BY_ID = new Map(CURRICULUM_OPTIONS.map(o => [o.id, o] as const));
 
 export interface SelfPlayPanelProps {
-  agent: Agent | null;
+  opponent: Opponent | null;
   imitator: PlayerImitator | null;
   storage: BlobStorage;
-  /** Reload both agents from storage after a batch updates their weights. */
-  onAgentRefresh: () => Promise<void>;
+  /** Reload both nets from storage after a batch updates their weights. */
+  onOpponentRefresh: () => Promise<void>;
   autoEnabled: boolean;
   onAutoEnabledChange: (enabled: boolean) => void;
   /**
    * MCTS sims/move to use for self-play. Sourced from the same slider
-   * that controls the in-game agent so a single knob covers both.
+   * that controls the in-game opponent so a single knob covers both.
    * Defaults from `SELFPLAY_SEARCH.simulations` are no longer applied
    * here — the caller is the source of truth.
    */
@@ -131,25 +132,25 @@ interface BatchStatus {
 }
 
 interface StepStatus {
-  phase: 'imitator' | 'ai';
+  phase: 'imitator' | 'opponent';
   stepIndex: number;
   totalLoss: number;
 }
 
 interface LivePly {
   gameIndex: number;
-  aiColor: 'w' | 'b';
+  opponentColor: 'w' | 'b';
   plyIndex: number;
   state: GameState;
 }
 
 interface RunBatchOutcome {
-  results: AiResult[];
+  results: OpponentResult[];
 }
 
 export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>(
   function SelfPlayPanel(
-    { agent, imitator, storage, onAgentRefresh, autoEnabled, onAutoEnabledChange, simulations },
+    { opponent, imitator, storage, onOpponentRefresh, autoEnabled, onAutoEnabledChange, simulations },
     ref,
   ) {
     const [mode, setMode] = useState<Mode>('fixed');
@@ -165,7 +166,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
     // by the worker's `ply` callback after every move; cleared when a
     // batch fully finishes so the board doesn't linger on a stale game.
     const [livePly, setLivePly] = useState<LivePly | null>(null);
-    // Running totals for the "Until AI wins" loop. Lives in component
+    // Running totals for the "Until opponent wins" loop. Lives in component
     // state so the panel re-renders as each batch lands; the loop itself
     // reads from refs to avoid stale closures.
     const [loopStats, setLoopStats] = useState<{
@@ -204,7 +205,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
 
     const runBatch = useCallback(
       async (gamesToPlay: number): Promise<RunBatchOutcome | null> => {
-        if (runningRef.current || !agent || !imitator) return null;
+        if (runningRef.current || !opponent || !imitator) return null;
 
         setRunning(true);
         runningRef.current = true;
@@ -213,15 +214,15 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
         setLivePly(null);
         setBatch({ played: 0, wins: 0, losses: 0, draws: 0, examples: 0 });
 
-        let aiWeights: Uint8Array;
+        let opponentWeights: Uint8Array;
         let imitatorWeights: Uint8Array;
         let replay: Uint8Array;
         let imitatorReplay: Uint8Array;
         try {
-          [aiWeights, imitatorWeights, replay, imitatorReplay] = await Promise.all([
-            agent.net.serialize(),
+          [opponentWeights, imitatorWeights, replay, imitatorReplay] = await Promise.all([
+            opponent.net.serialize(),
             imitator.net.serialize(),
-            Promise.resolve(agent.replayBuffer.serialize()),
+            Promise.resolve(opponent.replayBuffer.serialize()),
             Promise.resolve(imitator.replayBuffer.serialize()),
           ]);
         } catch (err) {
@@ -235,7 +236,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
           clientRef.current = new SelfPlayClient();
         }
 
-        const collectedResults: AiResult[] = [];
+        const collectedResults: OpponentResult[] = [];
 
         // Resolve the curriculum selection to a starting-FEN pool. We
         // snapshot the array here (not inside the worker callback) so
@@ -247,7 +248,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
         return new Promise<RunBatchOutcome | null>((resolve) => {
           clientRef.current!.start(
             {
-              aiWeights,
+              opponentWeights,
               imitatorWeights,
               replay,
               imitatorReplay,
@@ -262,14 +263,14 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               startingFens,
             },
             (game) => {
-              collectedResults.push(game.aiResult);
+              collectedResults.push(game.opponentResult);
               setBatch(prev => {
                 const base = prev ?? { played: 0, wins: 0, losses: 0, draws: 0, examples: 0 };
                 return {
                   played: game.index + 1,
-                  wins: base.wins + (game.aiResult === 'win' ? 1 : 0),
-                  losses: base.losses + (game.aiResult === 'loss' ? 1 : 0),
-                  draws: base.draws + (game.aiResult === 'draw' ? 1 : 0),
+                  wins: base.wins + (game.opponentResult === 'win' ? 1 : 0),
+                  losses: base.losses + (game.opponentResult === 'loss' ? 1 : 0),
+                  draws: base.draws + (game.opponentResult === 'draw' ? 1 : 0),
                   examples: base.examples,
                 };
               });
@@ -283,17 +284,17 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               );
               try {
                 await Promise.all([
-                  storage.put(AGENT_STORAGE_KEYS.WEIGHTS, result.aiWeights),
-                  storage.put(AGENT_STORAGE_KEYS.REPLAY, result.replay),
+                  storage.put(OPPONENT_STORAGE_KEYS.WEIGHTS, result.opponentWeights),
+                  storage.put(OPPONENT_STORAGE_KEYS.REPLAY, result.replay),
                   storage.put(IMITATOR_STORAGE_KEYS.WEIGHTS, result.imitatorWeights),
                   storage.put(IMITATOR_STORAGE_KEYS.REPLAY, result.imitatorReplay),
                 ]);
-                await onAgentRefresh();
+                await onOpponentRefresh();
                 setStatusMsg(
                   `Self-play done — ${result.games} game(s): ` +
-                  `AI ${result.wins}W ${result.losses}L ${result.draws}D, ` +
+                  `opponent ${result.wins}W ${result.losses}L ${result.draws}D, ` +
                   `${result.examplesAdded} new examples, ` +
-                  `AI ${result.finalStep} / imitator ${result.imitatorFinalStep} grad step(s).`,
+                  `opponent ${result.finalStep} / imitator ${result.imitatorFinalStep} grad step(s).`,
                 );
               } catch (err) {
                 setStatusMsg(
@@ -321,7 +322,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
               try {
                 setLivePly({
                   gameIndex: ply.gameIndex,
-                  aiColor: ply.aiColor,
+                  opponentColor: ply.opponentColor,
                   plyIndex: ply.plyIndex,
                   state: fromFen(ply.fen),
                 });
@@ -334,12 +335,12 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
           );
         });
       },
-      [agent, imitator, storage, onAgentRefresh, curriculumId, simulations],
+      [opponent, imitator, storage, onOpponentRefresh, curriculumId, simulations],
     );
 
-    // "Until AI wins a game" loop: fire batches back-to-back and stop
-    // the moment the AI wins any game, the user hits Stop, or we hit
-    // the hard safety cap.
+    // "Until opponent wins a game" loop: fire batches back-to-back and
+    // stop the moment the opponent wins any game, the user hits Stop,
+    // or we hit the hard safety cap.
     //
     // We park `loopActiveRef` = true around the whole loop (not just
     // each batch) so the imperative `isRunning` getter — which Game.tsx
@@ -347,7 +348,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
     // in the brief windows between batches when runningRef has flipped
     // back to false.
     const runUntilWinLoop = useCallback(async () => {
-      if (!agent || !imitator) return;
+      if (!opponent || !imitator) return;
       if (loopActiveRef.current) return;
       loopActiveRef.current = true;
       setLoopActive(true);
@@ -362,7 +363,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
         while (!loopStopRef.current) {
           if (loopTotalRef.current >= UNTIL_WIN_HARD_CAP) {
             setStatusMsg(
-              `Stopped: AI did not win a game within the ${UNTIL_WIN_HARD_CAP}-game cap.`,
+              `Stopped: opponent did not win a game within the ${UNTIL_WIN_HARD_CAP}-game cap.`,
             );
             break;
           }
@@ -400,7 +401,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
 
           if (wonThisBatch) {
             setStatusMsg(
-              `AI won after ${loopTotalRef.current} game(s) — ` +
+              `Opponent won after ${loopTotalRef.current} game(s) — ` +
               `${loopWinsRef.current}W ${loopLossesRef.current}L ${loopDrawsRef.current}D.`,
             );
             break;
@@ -411,7 +412,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
         loopActiveRef.current = false;
         setLoopActive(false);
       }
-    }, [agent, imitator, batchSize, runBatch]);
+    }, [opponent, imitator, batchSize, runBatch]);
 
     const handleRun = useCallback(() => {
       if (mode === 'until-win') {
@@ -455,14 +456,14 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
         }}
       >
         <summary style={{ cursor: 'pointer', fontWeight: 'bold', userSelect: 'none' }}>
-          Self-play training (AI vs. player imitator)
+          Self-play training (opponent vs. player imitator)
         </summary>
 
         <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <div style={{ fontSize: '0.9em', color: '#444' }}>
-            The AI plays the player-imitator under MCTS and trains on the
-            outcomes. The imitator is whatever pattern your moves have
-            taught it so far — <strong>{bufferSize.toLocaleString()}</strong>{' '}
+            The opponent plays the player-imitator under MCTS and trains
+            on the outcomes. The imitator is whatever pattern your moves
+            have taught it so far — <strong>{bufferSize.toLocaleString()}</strong>{' '}
             user moves recorded. Runs in a background worker so the board
             stays responsive.
           </div>
@@ -489,7 +490,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
                 onChange={() => setMode('until-win')}
                 disabled={running || loopActive}
               />
-              {' '}Until AI wins a game
+              {' '}Until opponent wins a game
             </label>
           </div>
 
@@ -550,10 +551,10 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
             <button
               type="button"
               onClick={handleRun}
-              disabled={running || loopActive || agent === null || imitator === null}
+              disabled={running || loopActive || opponent === null || imitator === null}
               style={{ padding: '5px 14px', cursor: (running || loopActive) ? 'not-allowed' : 'pointer' }}
             >
-              {mode === 'until-win' ? 'Run until AI wins' : 'Run self-play batch'}
+              {mode === 'until-win' ? 'Run until opponent wins' : 'Run self-play batch'}
             </button>
             <button
               type="button"
@@ -572,7 +573,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
           {batch !== null && (
             <div style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
               Game {batch.played} —{' '}
-              AI: {batch.wins}W {batch.losses}L {batch.draws}D
+              Opponent: {batch.wins}W {batch.losses}L {batch.draws}D
               {batch.examples > 0 && ` — ${batch.examples} examples`}
             </div>
           )}
@@ -580,13 +581,13 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
           {mode === 'until-win' && loopStats !== null && (
             <div style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
               Loop: {loopStats.total} / {UNTIL_WIN_HARD_CAP} —{' '}
-              AI {loopStats.wins}W {loopStats.losses}L {loopStats.draws}D
+              Opponent {loopStats.wins}W {loopStats.losses}L {loopStats.draws}D
             </div>
           )}
 
           {running && stepStatus && (
             <div style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
-              {stepStatus.phase === 'imitator' ? 'Imitator' : 'AI'} grad step{' '}
+              {stepStatus.phase === 'imitator' ? 'Imitator' : 'Opponent'} grad step{' '}
               {stepStatus.stepIndex} / {SELFPLAY_GRADIENT_STEPS} —{' '}
               loss: {stepStatus.totalLoss.toFixed(4)}
             </div>
@@ -604,13 +605,14 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
 /**
  * Compact live-board view for the current self-play game.
  *
- * Orientation tracks the AI's color so the AI is always at the bottom
- * of the rendered board — this keeps the side labels stable across
- * games regardless of which color the AI was assigned this round.
+ * Orientation tracks the opponent's color so the opponent is always at
+ * the bottom of the rendered board — this keeps the side labels stable
+ * across games regardless of which color the opponent was assigned this
+ * round.
  */
 function LiveBoard({ livePly }: { livePly: LivePly }) {
-  const aiColorLabel = livePly.aiColor === 'w' ? 'White' : 'Black';
-  const imitatorColorLabel = livePly.aiColor === 'w' ? 'Black' : 'White';
+  const opponentColorLabel = livePly.opponentColor === 'w' ? 'White' : 'Black';
+  const imitatorColorLabel = livePly.opponentColor === 'w' ? 'Black' : 'White';
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'center' }}>
       <div style={{ fontSize: '0.85em', color: '#555' }}>
@@ -623,11 +625,11 @@ function LiveBoard({ livePly }: { livePly: LivePly }) {
         <Board
           state={livePly.state}
           interactive={false}
-          boardOrientation={livePly.aiColor === 'w' ? 'white' : 'black'}
+          boardOrientation={livePly.opponentColor === 'w' ? 'white' : 'black'}
         />
       </div>
       <div style={{ fontSize: '0.85em', fontWeight: 'bold', color: '#333' }}>
-        AI ({aiColorLabel})
+        Opponent ({opponentColorLabel})
       </div>
     </div>
   );

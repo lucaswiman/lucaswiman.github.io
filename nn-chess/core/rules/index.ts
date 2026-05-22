@@ -1,7 +1,7 @@
 // Thin wrapper around `chess.js` exposing only the subset of the rules
-// API the agent + UI + encoder need. Keeping this layer tight means we
-// can swap chess.js out later (e.g. for a wasm engine for speed) without
-// touching MCTS, the NN, or the UI.
+// API the opponent + UI + encoder need. Keeping this layer tight means
+// we can swap chess.js out later (e.g. for a wasm engine for speed)
+// without touching MCTS, the NN, or the UI.
 //
 // `GameState` is treated as immutable from the outside: `applyMove`
 // returns a new state and never mutates its input.

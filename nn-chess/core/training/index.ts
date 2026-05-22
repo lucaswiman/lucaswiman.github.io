@@ -7,17 +7,29 @@
 // Serialization wire format (Uint8Array):
 //   [0..3]   little-endian uint32: byte length of the JSON header
 //   [4..4+H) JSON header:
-//     v2 (current):
+//     v3 (current):
+//       { version: 3, count, capacity, featureLen,
+//         hasPolicyTarget[], legalCounts[] }
+//       Per-example float payload, tightly packed:
+//         features[i]      (featureLen float32s)
+//         valueTarget[i]   (1 float32)
+//         policyIndex[i]   (1 float32) if hasPolicyTarget[i], else nothing
+//         legalIndices[i]  (legalCounts[i] float32s) if legalCounts[i] > 0
+//       `legalCounts[i] == 0` means the example carried no legality info
+//       at record time (older sessions); the loaded example gets
+//       `legalMoveIndices = null` and the illegal-move loss term skips
+//       it. New examples typically have ~25–50 legal indices, so the
+//       payload grows by ~100–200 bytes per example.
+//
+//     v2 (legacy, still readable):
 //       { version: 2, count, capacity, featureLen, hasPolicyTarget[] }
 //       Per-example float payload, tightly packed:
 //         features[i]     (featureLen float32s)
 //         valueTarget[i]  (1 float32)
 //         policyIndex[i]  (1 float32) if hasPolicyTarget[i], else nothing
-//       The policy target is reconstituted as a one-hot Float32Array of
-//       length POLICY_SIZE at deserialize time. Storing the index instead
-//       of the dense vector shrinks each winning-side example from ~21 KB
-//       to ~4.6 KB — a ~4.5× reduction overall and the difference between
-//       the buffer fitting in storage or not.
+//       Examples loaded from v2 blobs come back with
+//       `legalMoveIndices = null` — they just don't contribute to the
+//       illegal-move loss until they age out of the ring.
 //
 //     v1 (legacy, still readable):
 //       { count, capacity, featureLen, hasPolicyTarget[] }
@@ -133,7 +145,7 @@ export function deserializeReplayBuffer(bytes: Uint8Array, capacity: number): Re
 
 // ── Serialization helpers ─────────────────────────────────────────────────────
 
-const SERIAL_VERSION = 2;
+const SERIAL_VERSION = 3;
 
 interface SerialHeader {
   /** Wire format version. Omitted in v1 blobs; v2+ always set. */
@@ -142,6 +154,12 @@ interface SerialHeader {
   capacity: number;
   featureLen: number;
   hasPolicyTarget: boolean[];
+  /**
+   * v3 only: number of legal-move indices stored for each example.
+   * `0` (or missing entry) means "no legality info". Absent entirely
+   * in v1/v2 blobs.
+   */
+  legalCounts?: number[];
 }
 
 /**
@@ -166,6 +184,7 @@ function serializeBuffer(examples: TrainingExample[], capacity: number): Uint8Ar
   const featureLen = count > 0 ? examples[0].features.length : 0;
 
   const hasPolicyTarget = examples.map(ex => ex.policyTarget !== null);
+  const legalCounts = examples.map(ex => ex.legalMoveIndices?.length ?? 0);
 
   const header: SerialHeader = {
     version: SERIAL_VERSION,
@@ -173,13 +192,14 @@ function serializeBuffer(examples: TrainingExample[], capacity: number): Uint8Ar
     capacity,
     featureLen,
     hasPolicyTarget,
+    legalCounts,
   };
   const headerBytes = new TextEncoder().encode(JSON.stringify(header));
 
-  // v2: each example is features + valueTarget + optional policy index (1 float).
+  // v3: features + valueTarget + optional policy index + legal indices.
   let floatCount = 0;
   for (let i = 0; i < count; i++) {
-    floatCount += featureLen + 1 + (hasPolicyTarget[i] ? 1 : 0);
+    floatCount += featureLen + 1 + (hasPolicyTarget[i] ? 1 : 0) + legalCounts[i];
   }
 
   // Build the float payload in its own buffer (avoids alignment issues when
@@ -195,6 +215,12 @@ function serializeBuffer(examples: TrainingExample[], capacity: number): Uint8Ar
     if (hasPolicyTarget[i] && ex.policyTarget !== null) {
       floatPayload[offset] = policyTargetIndex(ex.policyTarget);
       offset += 1;
+    }
+    if (legalCounts[i] > 0 && ex.legalMoveIndices !== null) {
+      for (const idx of ex.legalMoveIndices) {
+        floatPayload[offset] = idx;
+        offset += 1;
+      }
     }
   }
 
@@ -225,6 +251,7 @@ function deserializeExamples(bytes: Uint8Array): TrainingExample[] {
 
   const { count, featureLen, hasPolicyTarget } = header;
   const version = header.version ?? 1;
+  const legalCounts = header.legalCounts ?? [];
   if (count === 0) return [];
 
   const payloadStart = 4 + headerLen;
@@ -255,7 +282,21 @@ function deserializeExamples(bytes: Uint8Array): TrainingExample[] {
       }
     }
 
-    examples.push({ features, valueTarget, policyTarget });
+    // v3: legal-move indices follow the policy target. v1/v2 buffers
+    // didn't store them, so `legalCounts[i]` defaults to 0 and the
+    // example loads with `legalMoveIndices = null`.
+    let legalMoveIndices: number[] | null = null;
+    const lc = legalCounts[i] ?? 0;
+    if (version >= 3 && lc > 0) {
+      const list: number[] = new Array(lc);
+      for (let k = 0; k < lc; k++) {
+        list[k] = Math.round(floatView[offset]);
+        offset += 1;
+      }
+      legalMoveIndices = list;
+    }
+
+    examples.push({ features, valueTarget, policyTarget, legalMoveIndices });
   }
 
   return examples;

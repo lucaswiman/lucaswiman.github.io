@@ -4,6 +4,7 @@ import { TrainingPanel } from './TrainingPanel.js';
 import { InspectorPanel } from './InspectorPanel.js';
 import { SelfPlayPanel } from './SelfPlayPanel.js';
 import type { SelfPlayPanelHandle } from './SelfPlayPanel.js';
+import { EndgameGymPanel } from './EndgameGymPanel.js';
 import {
   initialState,
   applyMove,
@@ -14,18 +15,19 @@ import {
 } from '../core/rules/index.js';
 import type { GameState, Move, Outcome } from '../core/rules/index.js';
 import { encodeState } from '../core/encoding/index.js';
-import type { Agent, GameMoveRecord } from '../core/agent/index.js';
+import type { Opponent, GameMoveRecord } from '../core/opponent/index.js';
+import { legalMoveIndicesFor } from '../core/opponent/index.js';
 import type { PlayerImitator } from '../core/imitator/index.js';
 import type { SearchResult } from '../core/mcts/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
 import { getJson, putJson } from '../core/storage/index.js';
 import {
-  AGENT_CONFIG,
-  createAgentStorage,
-  loadAgentFromStorage,
+  OPPONENT_CONFIG,
+  createOpponentStorage,
+  loadOpponentFromStorage,
   loadPlayerImitatorFromStorage,
   AUTO_SELFPLAY_PREF_KEY,
-} from './agent-config.js';
+} from './opponent-config.js';
 import { ENDGAME_PRESETS, ENDGAME_PRESETS_BY_ID } from './endgame-presets.js';
 import {
   LICHESS_CATEGORIES,
@@ -66,9 +68,9 @@ function sessionFromState(state: GameState): GameSession {
 }
 
 export default function Game() {
-  const [agent, setAgent] = useState<Agent | null>(null);
+  const [opponent, setOpponent] = useState<Opponent | null>(null);
   const [imitator, setImitator] = useState<PlayerImitator | null>(null);
-  const [storage] = useState<BlobStorage>(createAgentStorage);
+  const [storage] = useState<BlobStorage>(createOpponentStorage);
   const [playerColor, setPlayerColor] = useState<PlayerColor>('w');
   const [colorPreference, setColorPreference] = useState<ColorPreference>('random');
   const [setupId, setSetupId] = useState<SetupId>('standard');
@@ -76,27 +78,27 @@ export default function Game() {
   const [customFenError, setCustomFenError] = useState<string | null>(null);
   const [currentPuzzle, setCurrentPuzzle] = useState<LichessPuzzle | null>(null);
   const [session, setSession] = useState<GameSession>(() => sessionFromState(initialState()));
-  const [agentThinking, setAgentThinking] = useState(false);
+  const [opponentThinking, setOpponentThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [agentVersion, setAgentVersion] = useState(0);
+  const [opponentVersion, setOpponentVersion] = useState(0);
   const [lastSearch, setLastSearch] = useState<SearchResult | null>(null);
   // Default true: the brief asks for auto-batching on by default; the
   // persisted preference (loaded asynchronously below) overrides this
   // once it lands.
   const [autoSelfPlay, setAutoSelfPlay] = useState(true);
-  const [simulations, setSimulations] = useState(AGENT_CONFIG.simulations);
+  const [simulations, setSimulations] = useState(OPPONENT_CONFIG.simulations);
   // Gates the "persist session on change" effect: we only start writing
   // after the load attempt finishes, so the initial in-memory state
   // can't overwrite a saved session before we've had a chance to read it.
   const [sessionLoaded, setSessionLoaded] = useState(false);
 
-  const agentRef = useRef<Agent | null>(null);
-  agentRef.current = agent;
+  const opponentRef = useRef<Opponent | null>(null);
+  opponentRef.current = opponent;
 
   const selfPlayPanelRef = useRef<SelfPlayPanelHandle | null>(null);
 
-  // Prevents double-fire of the agent move under React Strict Mode.
-  const agentMoveInFlight = useRef(false);
+  // Prevents double-fire of the opponent move under React Strict Mode.
+  const opponentMoveInFlight = useRef(false);
   const recordedRef = useRef<GameSession | null>(null);
   // Tracks which finished session has already kicked off auto-self-play.
   // Distinct from `recordedRef` because the auto-batch is gated on
@@ -104,9 +106,9 @@ export default function Game() {
   const autoBatchedRef = useRef<GameSession | null>(null);
 
   const applyStartingState = useCallback((state: GameState) => {
-    agentMoveInFlight.current = false;
+    opponentMoveInFlight.current = false;
     recordedRef.current = null;
-    setAgentThinking(false);
+    setOpponentThinking(false);
     setSession(sessionFromState(state));
     setLastSearch(null);
     setError(null);
@@ -168,16 +170,16 @@ export default function Game() {
   useEffect(() => {
     let cancelled = false;
     Promise.all([
-      loadAgentFromStorage(storage),
+      loadOpponentFromStorage(storage),
       loadPlayerImitatorFromStorage(storage),
     ])
-      .then(([loadedAgent, loadedImitator]) => {
+      .then(([loadedOpponent, loadedImitator]) => {
         if (cancelled) return;
-        setAgent(loadedAgent);
+        setOpponent(loadedOpponent);
         setImitator(loadedImitator);
       })
       .catch(err => {
-        if (!cancelled) setError(`Failed to load agent: ${err instanceof Error ? err.message : String(err)}`);
+        if (!cancelled) setError(`Failed to load opponent: ${err instanceof Error ? err.message : String(err)}`);
       });
     return () => { cancelled = true; };
   }, [storage]);
@@ -201,13 +203,13 @@ export default function Game() {
   }, [storage]);
 
   useEffect(() => {
-    if (agent) agent.setSimulations(simulations);
-  }, [agent, simulations]);
+    if (opponent) opponent.setSimulations(simulations);
+  }, [opponent, simulations]);
 
   // Restore the last in-progress (or just-finished) game from storage.
   // Runs once on mount. If the saved session is already terminal we
   // park its reference in `recordedRef` so the game-over effect below
-  // doesn't double-record it into the agent's replay buffer.
+  // doesn't double-record it into the opponent's replay buffer.
   useEffect(() => {
     let cancelled = false;
     loadPersistedSession(storage)
@@ -261,22 +263,22 @@ export default function Game() {
   }, [session, playerColor, colorPreference, setupId, customFen, currentPuzzle, sessionLoaded, storage]);
 
   useEffect(() => {
-    if (agent === null) return;
+    if (opponent === null) return;
     if (session.over) return;
-    if (agentMoveInFlight.current) return;
+    if (opponentMoveInFlight.current) return;
 
     const currentSide = sideToMove(session.state);
     if (currentSide === playerColor) return;
 
-    agentMoveInFlight.current = true;
-    setAgentThinking(true);
+    opponentMoveInFlight.current = true;
+    setOpponentThinking(true);
 
     const capturedState = session.state;
 
-    agent.selectMove(capturedState).then(({ move, rootValue, visitCounts }) => {
-      agentMoveInFlight.current = false;
+    opponent.selectMove(capturedState).then(({ move, rootValue, visitCounts }) => {
+      opponentMoveInFlight.current = false;
 
-      // priorPolicy is not exposed by Agent.selectMove; leave it empty so the
+      // priorPolicy is not exposed by Opponent.selectMove; leave it empty so the
       // inspector's prior% column reads 0 until core/ is extended.
       setLastSearch({ bestMove: move, rootValue, visitCounts, priorPolicy: new Map() });
 
@@ -284,6 +286,7 @@ export default function Game() {
         features: encodeState(capturedState),
         move,
         sideToMove: sideToMove(capturedState),
+        legalMoveIndices: legalMoveIndicesFor(capturedState),
       };
 
       const nextState = applyMove(capturedState, move);
@@ -301,40 +304,40 @@ export default function Game() {
         };
       });
 
-      setAgentThinking(false);
+      setOpponentThinking(false);
     }).catch(err => {
-      agentMoveInFlight.current = false;
-      setAgentThinking(false);
-      setError(`Agent move failed: ${err instanceof Error ? err.message : String(err)}`);
+      opponentMoveInFlight.current = false;
+      setOpponentThinking(false);
+      setError(`Opponent move failed: ${err instanceof Error ? err.message : String(err)}`);
     });
-  }, [agent, session, playerColor]);
+  }, [opponent, session, playerColor]);
 
   useEffect(() => {
     if (!session.over) return;
-    if (!agent) return;
+    if (!opponent) return;
     if (!session.finalOutcome || session.finalOutcome === 'ongoing') return;
     if (recordedRef.current === session) return;
 
     recordedRef.current = session;
-    agent.recordGameResult(session.history, session.finalOutcome);
+    opponent.recordGameResult(session.history, session.finalOutcome);
 
     // Teach the player-imitator from the user's moves only. The
-    // agent's moves don't belong in the imitator's training set —
+    // opponent's moves don't belong in the imitator's training set —
     // the imitator's whole purpose is to model the *user*.
     if (imitator) {
       const userMoves = session.history.filter(r => r.sideToMove === playerColor);
       imitator.recordUserMoves(userMoves, session.finalOutcome);
     }
 
-    const savePromises: Promise<void>[] = [agent.saveTo(storage)];
+    const savePromises: Promise<void>[] = [opponent.saveTo(storage)];
     if (imitator) savePromises.push(imitator.saveTo(storage));
     const sessionSnapshot = session;
     Promise.all(savePromises)
       .then(() => {
         // Only kick the auto-batch AFTER the post-game save lands: the
         // worker reads weights+replay we just persisted via
-        // agent.saveTo(...) through the serialized handles passed in,
-        // so we want the in-memory `agent` to reflect every recorded
+        // opponent.saveTo(...) through the serialized handles passed in,
+        // so we want the in-memory `opponent` to reflect every recorded
         // example before we serialize it.
         if (!autoSelfPlay) return;
         if (autoBatchedRef.current === sessionSnapshot) return;
@@ -342,23 +345,24 @@ export default function Game() {
         if (!handle || handle.isRunning) return;
         autoBatchedRef.current = sessionSnapshot;
         // Fire and forget: the user may start a new game while this
-        // runs. onAgentRefresh re-reads from storage when it finishes,
+        // runs. onOpponentRefresh re-reads from storage when it finishes,
         // and that doesn't disturb the in-progress game's session state.
         void handle.triggerAutoBatch();
       })
       .catch(err => {
         setError(`Failed to save after game: ${err instanceof Error ? err.message : String(err)}`);
       });
-  }, [session, agent, imitator, playerColor, storage, autoSelfPlay]);
+  }, [session, opponent, imitator, playerColor, storage, autoSelfPlay]);
 
   const handleMove = useCallback((nextState: GameState, move: Move) => {
-    if (!agentRef.current) return;
+    if (!opponentRef.current) return;
     setSession(prev => {
       if (prev.over) return prev;
       const record: GameMoveRecord = {
         features: encodeState(prev.state),
         move,
         sideToMove: sideToMove(prev.state),
+        legalMoveIndices: legalMoveIndicesFor(prev.state),
       };
       const o = outcome(nextState);
       const gameOver = o !== 'ongoing';
@@ -425,25 +429,25 @@ export default function Game() {
     }
   }, [customFen, applyStartingState]);
 
-  const handleAgentRefresh = useCallback(async () => {
+  const handleOpponentRefresh = useCallback(async () => {
     try {
-      const [reloadedAgent, reloadedImitator] = await Promise.all([
-        loadAgentFromStorage(storage),
+      const [reloadedOpponent, reloadedImitator] = await Promise.all([
+        loadOpponentFromStorage(storage),
         loadPlayerImitatorFromStorage(storage),
       ]);
-      setAgent(reloadedAgent);
+      setOpponent(reloadedOpponent);
       setImitator(reloadedImitator);
-      setAgentVersion(v => v + 1);
+      setOpponentVersion(v => v + 1);
     } catch (err) {
-      setError(`Failed to reload agent: ${err instanceof Error ? err.message : String(err)}`);
+      setError(`Failed to reload opponent: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [storage]);
 
-  if (agent === null && error === null) {
-    return <div style={{ fontFamily: 'sans-serif', padding: '16px' }}>Loading agent…</div>;
+  if (opponent === null && error === null) {
+    return <div style={{ fontFamily: 'sans-serif', padding: '16px' }}>Loading opponent…</div>;
   }
 
-  if (error && agent === null) {
+  if (error && opponent === null) {
     return (
       <div style={{ fontFamily: 'sans-serif', padding: '16px', color: '#c00' }}>
         {error}
@@ -454,12 +458,12 @@ export default function Game() {
   const humanIsWhite = playerColor === 'w';
   const currentSide = sideToMove(session.state);
   const isHumanTurn = currentSide === playerColor && !session.over;
-  const interactive = isHumanTurn && !agentThinking;
+  const interactive = isHumanTurn && !opponentThinking;
 
   const o = session.finalOutcome;
   let outcomeText = '';
-  if (o === 'white-wins') outcomeText = playerColor === 'w' ? 'You win!' : 'Agent wins!';
-  else if (o === 'black-wins') outcomeText = playerColor === 'b' ? 'You win!' : 'Agent wins!';
+  if (o === 'white-wins') outcomeText = playerColor === 'w' ? 'You win!' : 'Opponent wins!';
+  else if (o === 'black-wins') outcomeText = playerColor === 'b' ? 'You win!' : 'Opponent wins!';
   else if (o === 'draw') outcomeText = 'Draw!';
 
   const activePreset = ENDGAME_PRESETS_BY_ID.get(setupId);
@@ -517,7 +521,7 @@ export default function Game() {
           <div style={{ color: '#666' }}>
             You're set to play{' '}
             <strong>{activePreset.winningSide === 'w' ? 'White' : 'Black'}</strong>{' '}
-            (the winning side) — that side's moves teach the agent the mating pattern.
+            (the winning side) — that side's moves teach the opponent the mating pattern.
           </div>
         </div>
       )}
@@ -615,12 +619,12 @@ export default function Game() {
       </div>
 
       <div style={{ marginBottom: '8px', minHeight: '24px' }}>
-        {agentThinking && (
-          <span style={{ color: '#666', fontStyle: 'italic' }}>AI thinking…</span>
+        {opponentThinking && (
+          <span style={{ color: '#666', fontStyle: 'italic' }}>Opponent thinking…</span>
         )}
-        {!agentThinking && !session.over && (
+        {!opponentThinking && !session.over && (
           <span>
-            {isHumanTurn ? 'Your turn' : 'Agent to move'}
+            {isHumanTurn ? 'Your turn' : 'Opponent to move'}
             {' — '}{currentSide === 'w' ? 'White' : 'Black'} to move
           </span>
         )}
@@ -664,34 +668,42 @@ export default function Game() {
         </div>
       )}
 
-      {agent && (
+      {opponent && (
         <div style={{ marginTop: '24px' }}>
           <TrainingPanel
-            agent={agent}
+            opponent={opponent}
             imitator={imitator}
             storage={storage}
-            onAgentRefresh={handleAgentRefresh}
-            key={agentVersion}
+            onOpponentRefresh={handleOpponentRefresh}
+            key={opponentVersion}
           />
         </div>
       )}
 
       <SelfPlayPanel
         ref={selfPlayPanelRef}
-        agent={agent}
+        opponent={opponent}
         imitator={imitator}
         storage={storage}
-        onAgentRefresh={handleAgentRefresh}
+        onOpponentRefresh={handleOpponentRefresh}
         autoEnabled={autoSelfPlay}
         onAutoEnabledChange={handleAutoSelfPlayChange}
         simulations={simulations}
       />
 
+      <EndgameGymPanel
+        opponent={opponent}
+        imitator={imitator}
+        storage={storage}
+        onOpponentRefresh={handleOpponentRefresh}
+        simulations={simulations}
+      />
+
       <InspectorPanel
-        agent={agent}
+        opponent={opponent}
         state={session.state}
         lastSearch={lastSearch}
-        agentVersion={agentVersion}
+        opponentVersion={opponentVersion}
       />
     </div>
   );
