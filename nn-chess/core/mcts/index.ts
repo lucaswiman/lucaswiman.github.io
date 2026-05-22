@@ -50,6 +50,10 @@ export interface SearchResult {
   rootValue: number;               // value backed up to the root after search
   visitCounts: Map<Move, number>;
   priorPolicy: Map<Move, number>;  // priors at the root (for inspection / training)
+  // Q(root, a) for every root edge, in [-1, 1] from the root's side-to-move
+  // perspective. Edges that were never visited (N=0) have Q=0. Useful for
+  // inspection / pedagogical visualisations of the PUCT exploit term.
+  edgeValues: Map<Move, number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +324,9 @@ export async function search(
   // --- Extract result ---
   const visitCounts = new Map<Move, number>(root.edges.map(e => [e.move, e.N]));
   const priorPolicy = new Map<Move, number>(root.edges.map(e => [e.move, e.P]));
+  const edgeValues = new Map<Move, number>(
+    root.edges.map(e => [e.move, e.N === 0 ? 0 : e.W / e.N]),
+  );
 
   // argmax visit count; ties broken by prior, then by move string (stable).
   let bestMove = root.edges[0].move;
@@ -344,5 +351,5 @@ export async function search(
   const bestEdge = root.edges.find(e => e.move === bestMove)!;
   const rootValue = bestEdge.N > 0 ? bestEdge.W / bestEdge.N : 0;
 
-  return { bestMove, rootValue, visitCounts, priorPolicy };
+  return { bestMove, rootValue, visitCounts, priorPolicy, edgeValues };
 }
