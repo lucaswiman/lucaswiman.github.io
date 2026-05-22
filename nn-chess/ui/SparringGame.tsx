@@ -12,7 +12,7 @@ import {
 import type { GameState, Move, Outcome } from '../core/rules/index.js';
 import { encodeState } from '../core/encoding/index.js';
 import type { Opponent, GameMoveRecord } from '../core/opponent/index.js';
-import { legalMoveIndicesFor } from '../core/opponent/index.js';
+import { legalMoveIndicesFor, mateInOneIndicesFor } from '../core/opponent/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
 import { StockfishEngine } from './stockfish-protocol.js';
 import type { StockfishConfig } from './stockfish-protocol.js';
@@ -209,6 +209,7 @@ export default function SparringGame() {
             move,
             sideToMove: currentSide,
             legalMoveIndices: legalMoveIndicesFor(preMoveState),
+            mateMoveIndices: mateInOneIndicesFor(preMoveState),
           };
 
           const nextState = applyMove(preMoveState, move);

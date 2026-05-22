@@ -7,6 +7,7 @@ import {
   createOpponent,
   loadOpponent,
   legalMoveIndicesFor,
+  mateInOneIndicesFor,
   OPPONENT_STORAGE_KEYS,
   type GameMoveRecord,
 } from './index.js';
@@ -51,12 +52,14 @@ function twoMoveGame(): GameMoveRecord[] {
       move: move0,
       sideToMove: 'w',
       legalMoveIndices: legalMoveIndicesFor(state0),
+      mateMoveIndices: mateInOneIndicesFor(state0),
     },
     {
       features: encodeState(state1),
       move: move1,
       sideToMove: 'b',
       legalMoveIndices: legalMoveIndicesFor(state1),
+      mateMoveIndices: mateInOneIndicesFor(state1),
     },
   ];
 }
@@ -128,6 +131,49 @@ describe('buildTrainingExamples', () => {
     expect(() => buildTrainingExamples(records, 'ongoing')).toThrow();
   });
 
+  it('emits a corrective policy target when a mate-in-1 was on the board and was MISSED', () => {
+    // White Ke6, Qd1, Black Kf8. The position is a forced mate-in-1
+    // for White: Qd7! threatens Qf7# and Black has no escape — wait,
+    // simpler: reuse the existing mate-in-1 fixture from mcts.test.ts:
+    // K f6, Qg1, k g8.  g1g7 is the unique mate.  We record a NON-mate
+    // move (g1a1, a quiet queen retreat) to simulate the case the user
+    // is worried about: a checkmate left on the table.
+    const state = fromFen('6k1/8/5K2/8/8/8/8/6Q1 w - - 0 1');
+    const records: GameMoveRecord[] = [{
+      features: encodeState(state),
+      move: 'g1a1',  // legal non-mate retreat
+      sideToMove: 'w',
+      legalMoveIndices: legalMoveIndicesFor(state),
+      mateMoveIndices: mateInOneIndicesFor(state),
+    }];
+    // The fixture is interesting only if there really IS a mate-in-1.
+    expect(records[0].mateMoveIndices.length).toBeGreaterThan(0);
+
+    // Both win and draw should still emit the corrective target — the
+    // corrective behaviour is independent of game outcome.
+    const examples = buildTrainingExamples(records, 'draw');
+    const target = examples[0].policyTarget!;
+    expect(target).not.toBeNull();
+
+    // Every mate index should have positive weight.
+    for (const i of records[0].mateMoveIndices) {
+      expect(target[i]).toBeGreaterThan(0);
+    }
+    // Every legal non-mate index should have NEGATIVE weight (the played
+    // move d1d2 is one of these, but the property must hold for every
+    // non-mate alternative).
+    const mateSet = new Set(records[0].mateMoveIndices);
+    const nonMate = records[0].legalMoveIndices.filter(i => !mateSet.has(i));
+    for (const i of nonMate) {
+      expect(target[i]).toBeLessThan(0);
+    }
+    // Positive and negative sides each sum to ±1.
+    const pos = records[0].mateMoveIndices.reduce((s, i) => s + target[i], 0);
+    const neg = nonMate.reduce((s, i) => s + target[i], 0);
+    expect(pos).toBeCloseTo(1, 5);
+    expect(neg).toBeCloseTo(-1, 5);
+  });
+
   it('policy target one-hot index matches the played move', async () => {
     const records = twoMoveGame();
     // records[0] is white-to-move; white wins → policy target is set.
@@ -154,6 +200,7 @@ describe('buildTrainingExamples', () => {
         move,
         sideToMove: sideToMove(state),
         legalMoveIndices: legalMoveIndicesFor(state),
+        mateMoveIndices: mateInOneIndicesFor(state),
       });
       state = applyMove(state, move);
     }

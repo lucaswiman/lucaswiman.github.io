@@ -43,6 +43,20 @@ export interface SearchConfig {
   dirichletAlpha?: number;   // optional root-noise alpha (default: none)
   dirichletEpsilon?: number; // weight of dirichlet noise at the root
   rng?: () => number;        // deterministic rng for tests; default Math.random
+  // Plies of forced-line lookahead to run at each leaf expansion. When >0,
+  // before falling back to the NN value head MCTS asks "is this position a
+  // forced ±1/0 outcome within K plies under best play by both sides?"
+  // If so, that certain value replaces the NN's noisy estimate. This is
+  // pure rules-only propagation of "checkmate is terminal" — no chess
+  // heuristic beyond the existing terminal handling.
+  //
+  // Defaults to 1 (mate-in-1 detection at leaves). Combined with the
+  // mate-in-1 override in `selectEdge`, this is enough for the opponent
+  // to actively seize every available checkmate while keeping per-leaf
+  // cost bounded. Crank up to 2 to also detect mate-in-2 at leaves —
+  // useful for pedagogy demos where you want a single visit to the
+  // first move of a mating sequence to lock in immediately.
+  mateSearchDepth?: number;
 }
 
 export interface SearchResult {
@@ -54,6 +68,12 @@ export interface SearchResult {
   // perspective. Edges that were never visited (N=0) have Q=0. Useful for
   // inspection / pedagogical visualisations of the PUCT exploit term.
   edgeValues: Map<Move, number>;
+  // Set when at least one legal move from the root state delivers immediate
+  // checkmate. `bestMove` is guaranteed to be one of these moves, and any
+  // move-picker downstream of search() should treat this as mandatory: a
+  // known mate-in-1 is always strictly better than any uncertain
+  // alternative, so we never want to leave it on the board.
+  mateInOneMoves: Move[];
 }
 
 // ---------------------------------------------------------------------------
@@ -74,6 +94,10 @@ interface Edge {
   childState: GameState | null;
   // Pointer to the child node once it has been expanded
   childNode: Node | null;
+  // True iff applying `move` ends the game with the mover winning
+  // (i.e. delivers checkmate). Cached lazily on first inspection in
+  // selectEdge so we only pay one applyMove per edge per tree.
+  deliversCheckmate: boolean | null;
 }
 
 // One node in the tree = one game state.
@@ -152,8 +176,20 @@ function expandEdges(node: Node, priors: Map<Move, number>): void {
     W: 0,
     childState: null,
     childNode: null,
+    deliversCheckmate: null,
   }));
   node.isExpanded = true;
+}
+
+// Is the child state reached by this edge a terminal position where the
+// mover (the side that just moved through this edge) won? Computes and
+// caches the answer the first time it's asked.
+function edgeDeliversCheckmate(edge: Edge, parentState: GameState): boolean {
+  if (edge.deliversCheckmate !== null) return edge.deliversCheckmate;
+  const child = childState(edge, parentState);
+  const result = isTerminal(child) && terminalValueForMover(child) === 1;
+  edge.deliversCheckmate = result;
+  return result;
 }
 
 // PUCT score for one edge.
@@ -168,6 +204,21 @@ function puctScore(edge: Edge, sqrtParentN: number, cPuct: number): number {
 }
 
 function selectEdge(node: Node, cPuct: number): Edge {
+  // Forced-line override 1 — only one legal move. There's nothing to
+  // explore, so don't waste a PUCT computation: take the forced reply
+  // and let the search continue into the resulting position.
+  if (node.edges.length === 1) return node.edges[0];
+
+  // Forced-line override 2 — a move that delivers immediate checkmate.
+  // Checkmate is always strictly better than any uncertain alternative,
+  // so we pull it out of the PUCT competition entirely. This is the
+  // extension of "checkmate is terminal" the project's MCTS now relies
+  // on so it actively seizes mates instead of bumbling into them when
+  // sims happen to be lucky enough.
+  for (const edge of node.edges) {
+    if (edgeDeliversCheckmate(edge, node.state)) return edge;
+  }
+
   const sqrtN = Math.sqrt(node.edges.reduce((s, e) => s + e.N, 0));
   let best = node.edges[0];
   let bestScore = -Infinity;
@@ -190,6 +241,57 @@ function childState(edge: Edge, parentState: GameState): GameState {
 }
 
 // ---------------------------------------------------------------------------
+// Forced-mate lookahead
+// ---------------------------------------------------------------------------
+
+// Returns the value of `state` from its side-to-move's perspective, if every
+// line within `depth` plies resolves to a terminal outcome under optimal
+// play. Returns null when at least one continuation hits the depth horizon
+// without terminating — i.e. the result is uncertain at this depth and the
+// caller should fall back to the value-head estimate.
+//
+// This is the depth-K extension of MCTS's existing "checkmate is terminal"
+// rule: rather than waiting for PUCT selection to randomly stumble into a
+// terminal leaf, every expansion gets a small bounded minimax over the
+// terminal outcomes. No piece values, no king safety, no chess heuristic
+// beyond "is this state checkmated / stalemated / drawn under the rules?"
+function forcedTerminalValue(state: GameState, depth: number): number | null {
+  if (isTerminal(state)) {
+    // terminalValueForMover is from the just-moved side's POV; side-to-
+    // move at a terminal is the opponent of the mover, so flip the sign.
+    return -terminalValueForMover(state);
+  }
+  if (depth <= 0) return null;
+
+  const moves = legalMoves(state);
+  // A non-terminal node has at least one legal move (no-legal-moves would
+  // be checkmate or stalemate, both caught by isTerminal above).
+  let best: number = -Infinity;
+  let sawHorizon = false;
+  for (const m of moves) {
+    const v = forcedTerminalValue(applyMove(state, m), depth - 1);
+    if (v === null) {
+      sawHorizon = true;
+      // Don't bail yet: we might still find a forced-win move that
+      // dominates the horizon-uncertain branches.
+      continue;
+    }
+    // v is from the child's side-to-move (the opponent). Flip for ours.
+    const our = -v;
+    if (our > best) best = our;
+    if (our === 1) return 1;  // found a forced-win move — game over here.
+  }
+  // No forced win. If any branch ran off the depth horizon, we can't
+  // claim a forced loss either — that branch might escape with deeper
+  // search. Fall back to the value head.
+  if (sawHorizon) return null;
+  // Every branch resolved. `best` is the strongest guarantee we have:
+  // -1 means every move loses (forced loss); 0 means our best is a
+  // forced draw.
+  return best === -Infinity ? null : best;
+}
+
+// ---------------------------------------------------------------------------
 // Main search
 // ---------------------------------------------------------------------------
 
@@ -204,6 +306,7 @@ export async function search(
 
   const { simulations, cPuct, dirichletAlpha, dirichletEpsilon } = config;
   const rng = config.rng ?? Math.random.bind(Math);
+  const mateSearchDepth = config.mateSearchDepth ?? 1;
 
   // Cache: repetitionKey → { priors, value } so transpositions reuse the
   // same evaluation. (One search call only; we don't persist across calls.)
@@ -301,6 +404,17 @@ export async function search(
       expandEdges(node, ev.priors);
       // value is from the current node's side-to-move perspective.
       value = ev.value;
+
+      // Forced-line override: if a bounded minimax over the rules alone
+      // proves this position is a ±1/0 outcome within `mateSearchDepth`
+      // plies, replace the NN's value with that certainty. This is what
+      // makes a mate-in-2 lock in from a single visit to the first move:
+      // expanding the post-1st-move leaf does a depth-2 search, finds
+      // the mate, and backs +1 up through the edge that selected it.
+      if (mateSearchDepth > 0) {
+        const forced = forcedTerminalValue(node.state, mateSearchDepth);
+        if (forced !== null) value = forced;
+      }
     }
 
     // --- Backup ---
@@ -328,19 +442,40 @@ export async function search(
     root.edges.map(e => [e.move, e.N === 0 ? 0 : e.W / e.N]),
   );
 
-  // argmax visit count; ties broken by prior, then by move string (stable).
-  let bestMove = root.edges[0].move;
-  let bestN = -1;
-  let bestP = -1;
+  // Collect every root edge that ends the game in our favour. The cache
+  // populated by selectEdge above already knows the answer for any edge
+  // that was ever inspected; for edges we never visited we compute it
+  // here so the caller's "any mate available?" question is always
+  // exhaustive at the root.
+  const mateInOneMoves: Move[] = [];
   for (const edge of root.edges) {
-    if (
-      edge.N > bestN ||
-      (edge.N === bestN && edge.P > bestP) ||
-      (edge.N === bestN && edge.P === bestP && edge.move < bestMove)
-    ) {
-      bestN = edge.N;
-      bestP = edge.P;
-      bestMove = edge.move;
+    if (edgeDeliversCheckmate(edge, root.state)) {
+      mateInOneMoves.push(edge.move);
+    }
+  }
+  // Lexicographic order so ties are deterministic (matches how bestMove
+  // breaks ties below).
+  mateInOneMoves.sort();
+
+  // bestMove: a mate-in-1 wins outright over everything else. Otherwise
+  // argmax visit count; ties broken by prior, then by move string (stable).
+  let bestMove: Move;
+  if (mateInOneMoves.length > 0) {
+    bestMove = mateInOneMoves[0];
+  } else {
+    bestMove = root.edges[0].move;
+    let bestN = -1;
+    let bestP = -1;
+    for (const edge of root.edges) {
+      if (
+        edge.N > bestN ||
+        (edge.N === bestN && edge.P > bestP) ||
+        (edge.N === bestN && edge.P === bestP && edge.move < bestMove)
+      ) {
+        bestN = edge.N;
+        bestP = edge.P;
+        bestMove = edge.move;
+      }
     }
   }
 
@@ -351,5 +486,12 @@ export async function search(
   const bestEdge = root.edges.find(e => e.move === bestMove)!;
   const rootValue = bestEdge.N > 0 ? bestEdge.W / bestEdge.N : 0;
 
-  return { bestMove, rootValue, visitCounts, priorPolicy, edgeValues };
+  return {
+    bestMove,
+    rootValue,
+    visitCounts,
+    priorPolicy,
+    edgeValues,
+    mateInOneMoves,
+  };
 }
