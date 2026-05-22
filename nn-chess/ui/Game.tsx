@@ -6,6 +6,16 @@ import { SelfPlayPanel } from './SelfPlayPanel.js';
 import type { SelfPlayPanelHandle } from './SelfPlayPanel.js';
 import { EndgameGymPanel } from './EndgameGymPanel.js';
 import { TrainingLog, useTrainingLog } from './TrainingLog.js';
+import { TrainingStatsPanel } from './TrainingStats.js';
+import {
+  type NetStats,
+  emptyNetStats,
+  loadNetStats,
+  saveNetStats,
+  addTrainingPass,
+  OPPONENT_TRAIN_STATS_KEY,
+  IMITATOR_TRAIN_STATS_KEY,
+} from './training-stats.js';
 import {
   initialState,
   applyMove,
@@ -98,6 +108,10 @@ export default function Game() {
   // gradient-descent vs MCTS phase transitions and storage saves
   // without staring at the console.
   const trainingLog = useTrainingLog();
+  // Cumulative gradient-step / examples-seen counters per net, loaded
+  // from storage on mount and bumped after every training pass.
+  const [opponentStats, setOpponentStats] = useState<NetStats>(emptyNetStats);
+  const [imitatorStats, setImitatorStats] = useState<NetStats>(emptyNetStats);
   // Gates the "persist session on change" effect: we only start writing
   // after the load attempt finishes, so the initial in-memory state
   // can't overwrite a saved session before we've had a chance to read it.
@@ -228,6 +242,60 @@ export default function Game() {
     setPreviewTraining(enabled);
     void putJson(storage, PREVIEW_TRAINING_PREF_KEY, { enabled });
   }, [storage]);
+
+  // Hydrate cumulative training stats from storage. Failures fall back
+  // to zeros — the worst case is a fresh-looking counter, not data
+  // corruption, since stats are independent of weights.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      loadNetStats(storage, OPPONENT_TRAIN_STATS_KEY),
+      loadNetStats(storage, IMITATOR_TRAIN_STATS_KEY),
+    ])
+      .then(([opp, imi]) => {
+        if (cancelled) return;
+        setOpponentStats(opp);
+        setImitatorStats(imi);
+      })
+      .catch(() => { /* keep defaults */ });
+    return () => { cancelled = true; };
+  }, [storage]);
+
+  /**
+   * Record a finished training pass. Called by each training-side panel
+   * after the worker reports `done`. `gradientSteps` is the worker's
+   * `finalStep` / `imitatorFinalStep`; `batchSize` is whatever the panel
+   * configured the worker to use. Passes with zero steps are no-ops so
+   * panels can call this unconditionally on `done`.
+   */
+  const recordTrainingPass = useCallback((
+    net: 'opponent' | 'imitator',
+    delta: { gradientSteps: number; batchSize: number },
+  ) => {
+    if (delta.gradientSteps <= 0) return;
+    const bufferSize =
+      net === 'opponent'
+        ? opponentRef.current?.replayBuffer.size() ?? 0
+        : imitator?.replayBuffer.size() ?? 0;
+    const setter = net === 'opponent' ? setOpponentStats : setImitatorStats;
+    const storageKey = net === 'opponent' ? OPPONENT_TRAIN_STATS_KEY : IMITATOR_TRAIN_STATS_KEY;
+    setter(prev => {
+      const next = addTrainingPass(prev, delta);
+      void saveNetStats(storage, storageKey, next);
+      const epochs = bufferSize > 0 ? next.examplesSeen / bufferSize : 0;
+      const label = net === 'opponent' ? 'Opponent' : 'Imitator';
+      trainingLog.append({
+        source: 'training',
+        kind: 'info',
+        message:
+          `${label} lifetime: ${next.gradientSteps.toLocaleString()} step(s), ` +
+          `${next.examplesSeen.toLocaleString()} example(s) seen ` +
+          `(~${epochs.toFixed(2)} effective epoch(s) over the current ` +
+          `${bufferSize.toLocaleString()}-example buffer).`,
+      });
+      return next;
+    });
+  }, [storage, imitator, trainingLog]);
 
   useEffect(() => {
     if (opponent) opponent.setSimulations(simulations);
@@ -513,7 +581,9 @@ export default function Game() {
         storage.delete(OPPONENT_STORAGE_KEYS.WEIGHTS),
         storage.delete(OPPONENT_STORAGE_KEYS.META),
         storage.delete(OPPONENT_STORAGE_KEYS.REPLAY),
+        storage.delete(OPPONENT_TRAIN_STATS_KEY),
       ]);
+      setOpponentStats(emptyNetStats());
       await handleOpponentRefresh();
     } catch (err) {
       setError(`Failed to reset opponent model: ${err instanceof Error ? err.message : String(err)}`);
@@ -531,7 +601,9 @@ export default function Game() {
         storage.delete(IMITATOR_STORAGE_KEYS.WEIGHTS),
         storage.delete(IMITATOR_STORAGE_KEYS.META),
         storage.delete(IMITATOR_STORAGE_KEYS.REPLAY),
+        storage.delete(IMITATOR_TRAIN_STATS_KEY),
       ]);
+      setImitatorStats(emptyNetStats());
       await handleOpponentRefresh();
     } catch (err) {
       setError(`Failed to reset imitator model: ${err instanceof Error ? err.message : String(err)}`);
@@ -764,6 +836,17 @@ export default function Game() {
       )}
 
       {opponent && (
+        <TrainingStatsPanel
+          opponentStats={opponentStats}
+          imitatorStats={imitatorStats}
+          opponentBufferSize={opponent.replayBuffer.size()}
+          imitatorBufferSize={imitator?.replayBuffer.size() ?? 0}
+          opponentBufferCapacity={opponent.replayBuffer.capacity()}
+          imitatorBufferCapacity={imitator?.replayBuffer.capacity() ?? opponent.replayBuffer.capacity()}
+        />
+      )}
+
+      {opponent && (
         <div style={{ marginTop: '24px' }}>
           <TrainingPanel
             opponent={opponent}
@@ -771,6 +854,7 @@ export default function Game() {
             storage={storage}
             onOpponentRefresh={handleOpponentRefresh}
             onLog={trainingLog.append}
+            onTrainingPass={recordTrainingPass}
             key={opponentVersion}
           />
         </div>
@@ -788,6 +872,7 @@ export default function Game() {
         onPreviewEnabledChange={handlePreviewTrainingChange}
         simulations={simulations}
         onLog={trainingLog.append}
+        onTrainingPass={recordTrainingPass}
       />
 
       <EndgameGymPanel
@@ -799,6 +884,7 @@ export default function Game() {
         onPreviewEnabledChange={handlePreviewTrainingChange}
         simulations={simulations}
         onLog={trainingLog.append}
+        onTrainingPass={recordTrainingPass}
       />
 
       <TrainingLog entries={trainingLog.entries} onClear={trainingLog.clear} />

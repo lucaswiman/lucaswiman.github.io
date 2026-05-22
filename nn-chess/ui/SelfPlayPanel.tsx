@@ -47,6 +47,7 @@ import {
 import { ENDGAME_PRESETS } from './endgame-presets.js';
 import { LICHESS_CATEGORIES } from './lichess-endgames.js';
 import type { LogAppender } from './TrainingLog.js';
+import type { RecordTrainingPass } from './TrainingPanel.js';
 
 /**
  * Hard cap on the "Until opponent wins a game" loop so a stuck run
@@ -119,6 +120,7 @@ export interface SelfPlayPanelProps {
    */
   simulations: number;
   onLog: LogAppender;
+  onTrainingPass: RecordTrainingPass;
 }
 
 export interface SelfPlayPanelHandle {
@@ -170,6 +172,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
       onPreviewEnabledChange,
       simulations,
       onLog,
+      onTrainingPass,
     },
     ref,
   ) {
@@ -338,6 +341,14 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
                   storage.put(IMITATOR_STORAGE_KEYS.REPLAY, result.imitatorReplay),
                 ]);
                 await onOpponentRefresh();
+                onTrainingPass('opponent', {
+                  gradientSteps: result.finalStep,
+                  batchSize: SELFPLAY_GRADIENT_BATCH,
+                });
+                onTrainingPass('imitator', {
+                  gradientSteps: result.imitatorFinalStep,
+                  batchSize: SELFPLAY_GRADIENT_BATCH,
+                });
                 onLog({
                   source: 'selfplay',
                   kind: 'save',
@@ -392,7 +403,7 @@ export const SelfPlayPanel = forwardRef<SelfPlayPanelHandle, SelfPlayPanelProps>
           );
         });
       },
-      [opponent, imitator, storage, onOpponentRefresh, curriculumId, simulations, previewEnabled, onLog],
+      [opponent, imitator, storage, onOpponentRefresh, curriculumId, simulations, previewEnabled, onLog, onTrainingPass],
     );
 
     // "Until opponent wins a game" loop: fire batches back-to-back and

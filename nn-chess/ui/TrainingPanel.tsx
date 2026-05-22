@@ -18,12 +18,18 @@ import { OPPONENT_STORAGE_KEYS } from '../core/opponent/index.js';
 import { IMITATOR_STORAGE_KEYS } from '../core/imitator/index.js';
 import type { LogAppender } from './TrainingLog.js';
 
+export type RecordTrainingPass = (
+  net: 'opponent' | 'imitator',
+  delta: { gradientSteps: number; batchSize: number },
+) => void;
+
 export interface TrainingPanelProps {
   opponent: Opponent;
   imitator: PlayerImitator | null;
   storage: BlobStorage;
   onOpponentRefresh: () => Promise<void>;
   onLog: LogAppender;
+  onTrainingPass: RecordTrainingPass;
 }
 
 interface TrainProgress {
@@ -35,7 +41,7 @@ interface TrainProgress {
   totalLoss: number;
 }
 
-export function TrainingPanel({ opponent, imitator, storage, onOpponentRefresh, onLog }: TrainingPanelProps) {
+export function TrainingPanel({ opponent, imitator, storage, onOpponentRefresh, onLog, onTrainingPass }: TrainingPanelProps) {
   const [steps, setSteps] = useState(100);
   const [batchSize, setBatchSize] = useState(32);
   const [training, setTraining] = useState(false);
@@ -123,6 +129,8 @@ export function TrainingPanel({ opponent, imitator, storage, onOpponentRefresh, 
           storage.put(IMITATOR_STORAGE_KEYS.REPLAY, result.imitatorReplay),
         ]);
         await onOpponentRefresh();
+        onTrainingPass('opponent', { gradientSteps: result.finalStep, batchSize });
+        onTrainingPass('imitator', { gradientSteps: result.imitatorFinalStep, batchSize });
         onLog({
           source: 'training',
           kind: 'save',
@@ -168,7 +176,7 @@ export function TrainingPanel({ opponent, imitator, storage, onOpponentRefresh, 
       onDone,
       onError,
     );
-  }, [training, opponent, imitator, storage, batchSize, steps, onOpponentRefresh, onLog]);
+  }, [training, opponent, imitator, storage, batchSize, steps, onOpponentRefresh, onLog, onTrainingPass]);
 
   const handleStop = useCallback(() => {
     clientRef.current?.stop();

@@ -42,6 +42,7 @@ import {
 } from './opponent-config.js';
 import { GYM_CATEGORIES, GYM_CATEGORIES_BY_ID } from './endgame-gym-scenarios.js';
 import type { LogAppender } from './TrainingLog.js';
+import type { RecordTrainingPass } from './TrainingPanel.js';
 
 /**
  * Default cap on attempts per scenario. Set low so the gym moves
@@ -67,6 +68,7 @@ export interface EndgameGymPanelProps {
   /** MCTS sims/move — sourced from the in-game slider. */
   simulations: number;
   onLog: LogAppender;
+  onTrainingPass: RecordTrainingPass;
 }
 
 interface LiveState {
@@ -104,6 +106,7 @@ export function EndgameGymPanel({
   onPreviewEnabledChange,
   simulations,
   onLog,
+  onTrainingPass,
 }: EndgameGymPanelProps) {
   const [categoryId, setCategoryId] = useState<string>('presets');
   const [maxGamesPerScenario, setMaxGamesPerScenario] = useState(
@@ -267,6 +270,12 @@ export function EndgameGymPanel({
             storage.put(IMITATOR_STORAGE_KEYS.REPLAY, done.imitatorReplay),
           ]);
           await onOpponentRefresh();
+          // Gym only ever trains the opponent — `imitatorFinalStep` will
+          // be 0 here so the imitator counter doesn't move.
+          onTrainingPass('opponent', {
+            gradientSteps: done.finalStep,
+            batchSize: SELFPLAY_GRADIENT_BATCH,
+          });
           const conv = done.scenariosConverted ?? 0;
           const att = done.scenariosAttempted ?? 0;
           onLog({
@@ -318,7 +327,7 @@ export function EndgameGymPanel({
         }
       },
     );
-  }, [opponent, imitator, storage, onOpponentRefresh, simulations, category, maxGamesPerScenario, previewEnabled, onLog]);
+  }, [opponent, imitator, storage, onOpponentRefresh, simulations, category, maxGamesPerScenario, previewEnabled, onLog, onTrainingPass]);
 
   const handleStop = useCallback(() => {
     clientRef.current?.stop();
