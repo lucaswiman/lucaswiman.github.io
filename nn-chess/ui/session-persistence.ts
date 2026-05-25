@@ -37,6 +37,7 @@ export const LAST_GAME_KEY = 'ui/last-game';
 
 export type PlayerColor = 'w' | 'b';
 export type ColorPreference = 'w' | 'b' | 'random';
+export type OpponentKind = 'opponent' | 'imitator' | 'stockfish' | 'maia-2';
 
 export interface PersistedSession {
   playerColor: PlayerColor;
@@ -46,6 +47,9 @@ export interface PersistedSession {
   currentPuzzle: LichessPuzzle | null;
   startingFen: string;
   moves: Move[];
+  // Added with the opponent-dropdown merge. Older blobs that predate
+  // the field restore to 'opponent', preserving prior behaviour.
+  opponentKind?: OpponentKind;
 }
 
 export interface RestoredSession {
@@ -59,6 +63,7 @@ export interface RestoredSession {
   setupId: string;
   customFen: string;
   currentPuzzle: LichessPuzzle | null;
+  opponentKind: OpponentKind;
 }
 
 export function restoreSession(saved: PersistedSession): RestoredSession {
@@ -87,6 +92,7 @@ export function restoreSession(saved: PersistedSession): RestoredSession {
     setupId: saved.setupId,
     customFen: saved.customFen,
     currentPuzzle: saved.currentPuzzle,
+    opponentKind: saved.opponentKind ?? 'opponent',
   };
 }
 

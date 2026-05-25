@@ -59,6 +59,14 @@ export interface BoardProps {
   boardOrientation?: 'white' | 'black';
 
   /**
+   * Last move played, as a UCI string. When set, the source and target
+   * squares are highlighted so the user can see what just moved (useful
+   * when the opponent's reply slides into view without an animation cue).
+   * The trailing promotion suffix on a move like `e7e8q` is ignored.
+   */
+  lastMove?: Move | null;
+
+  /**
    * Called after every successful move with the resulting state and the
    * UCI move string. The future Opponent integration will use this to
    * trigger NN-driven replies.
@@ -103,6 +111,7 @@ export default function Board({
   state: controlledState,
   interactive = true,
   boardOrientation = 'white',
+  lastMove = null,
   onMove,
   onGameOver,
 }: BoardProps) {
@@ -179,6 +188,18 @@ export default function Board({
   // In controlled mode, the parent owns the history — we don't show it here.
   const moves = isControlled ? [] : internalState.moves;
 
+  // Translucent yellow on the from/to squares of the last move so it
+  // reads against both light and dark squares without overpowering the
+  // piece glyph. Mirrors the convention chess.com and lichess use.
+  const squareStyles: Record<string, React.CSSProperties> = {};
+  if (lastMove && lastMove.length >= 4) {
+    const from = lastMove.slice(0, 2);
+    const to = lastMove.slice(2, 4);
+    const highlight: React.CSSProperties = { background: 'rgba(255, 217, 0, 0.45)' };
+    squareStyles[from] = highlight;
+    squareStyles[to] = highlight;
+  }
+
   return (
     <div style={{ fontFamily: 'sans-serif' }}>
       <Chessboard
@@ -187,6 +208,7 @@ export default function Board({
           onPieceDrop: handlePieceDrop,
           allowDragging: interactive && !terminal,
           boardOrientation,
+          squareStyles,
           boardStyle: {
             borderRadius: '4px',
             boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
