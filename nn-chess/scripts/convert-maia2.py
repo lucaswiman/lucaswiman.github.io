@@ -312,6 +312,9 @@ def dump_reference(
     else:
         raise ValueError(f"invalid FEN: {fen}")
     board_input = deps["board_to_tensor"](board).unsqueeze(0)
+    # Capture the raw encoded board so the TS-side encoding parity test
+    # can compare without reimplementing maia2.utils.board_to_tensor.
+    encoded_board = board_input.cpu().numpy().astype(np.float32)
 
     es = torch.tensor([deps["map_to_category"](elo_self, elo_dict)])
     eo = torch.tensor([deps["map_to_category"](elo_oppo, elo_dict)])
@@ -384,6 +387,8 @@ def dump_reference(
         "elo_oppo": elo_oppo,
         "mirrored": mirrored,
         "legal_indices": legal_idx_in_canonical,
+        "encoded_board_flat": [float(x) for x in encoded_board.reshape(-1).tolist()],
+        "encoded_board_shape": list(encoded_board.shape),
         "shapes": {k: list(v.shape) for k, v in activations.items()},
         # Full activations would be huge; only keep the smaller ones in
         # the JSON. For the larger ones (post_patch / post_attn) we store
