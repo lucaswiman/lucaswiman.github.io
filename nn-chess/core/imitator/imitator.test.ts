@@ -270,6 +270,49 @@ describe('selectImitatorMove', () => {
       net.dispose();
     }
   });
+
+  it('MCTS mode returns a legal move and exposes search stats', async () => {
+    const net = ChessNet.create({ seed: 41 });
+    try {
+      const state = initialState();
+      const legal = new Set(legalMoves(state));
+      const result = await selectImitatorMove(net, state, {
+        search: { simulations: 8, cPuct: 1.5 },
+      });
+      expect(legal.has(result.move)).toBe(true);
+      expect(result.search).toBeDefined();
+      expect(result.search!.visitCounts.size).toBeGreaterThan(0);
+      // Visit counts must sum to the simulation budget.
+      const totalVisits = Array.from(result.search!.visitCounts.values()).reduce(
+        (a, b) => a + b,
+        0,
+      );
+      expect(totalVisits).toBe(8);
+      // Value head output is in [-1, 1].
+      expect(result.search!.rootValue).toBeGreaterThanOrEqual(-1);
+      expect(result.search!.rootValue).toBeLessThanOrEqual(1);
+    } finally {
+      net.dispose();
+    }
+  });
+
+  it('MCTS mode seizes a mate-in-1 via the search-internal override', async () => {
+    // Black king cornered on a8, white king on c7 supports a back-rank
+    // mate — White to move with Qb1-b8# (and Qb1-b7# also delivers).
+    // The mate-in-1 detector in `search()` should pick a mating move
+    // regardless of what the cold-start policy head says.
+    const net = ChessNet.create({ seed: 53 });
+    try {
+      const state = fromFen('k7/2K5/8/8/8/8/8/1Q6 w - - 0 1');
+      const result = await selectImitatorMove(net, state, {
+        search: { simulations: 4, cPuct: 1.5 },
+      });
+      expect(result.search!.mateInOneMoves.length).toBeGreaterThan(0);
+      expect(result.search!.mateInOneMoves).toContain(result.move);
+    } finally {
+      net.dispose();
+    }
+  });
 });
 
 // Real-ChessNet end-to-end check: after recordUserMoves + trainStep the

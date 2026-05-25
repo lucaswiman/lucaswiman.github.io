@@ -21,6 +21,7 @@ import {
 } from '../nn/index.js';
 import type { GameState, Move, Outcome } from '../rules/index.js';
 import { isTerminal, legalMoves } from '../rules/index.js';
+import { search, type SearchConfig } from '../mcts/index.js';
 import {
   createReplayBuffer,
   deserializeReplayBuffer,
@@ -40,36 +41,77 @@ export const IMITATOR_STORAGE_KEYS = {
 
 // ── selectImitatorMove ───────────────────────────────────────────────────────
 
+export interface ImitatorSelectOptions {
+  /**
+   * When provided, drive move selection with MCTS using the imitator's
+   * own net for priors and value. When absent, pick straight from the
+   * policy head (the raw "what would the user play here?" view, useful
+   * for tests and for interpretability inspection).
+   *
+   * MCTS is the same `search` function the opponent and self-play use,
+   * so the mate-in-1 override that lives inside it applies here too.
+   * That's consistent with the project's single approved heuristic
+   * ("checkmate is terminal") — see `core/mcts` for details — and with
+   * the existing `core/selfplay` flow which already drives the imitator
+   * with MCTS.
+   */
+  search?: SearchConfig;
+  /**
+   * Sampling temperature.
+   *
+   * - With `search` set, this is the visit-count sampling temperature
+   *   (T=0 picks argmax of visits; T=1 samples proportional to visits).
+   * - Without `search`, this is the raw-policy sampling temperature
+   *   (T=0 greedy over priors; T>0 samples ∝ P^(1/T)).
+   *
+   * Defaults to 0.
+   */
+  temperature?: number;
+  rng?: () => number;
+}
+
+export interface ImitatorSelectResult {
+  move: Move;
+  /** Legal-move priors out of the policy head. */
+  priors: Map<Move, number>;
+  /** Set only when `options.search` was provided. */
+  search?: {
+    rootValue: number;
+    visitCounts: Map<Move, number>;
+    edgeValues: Map<Move, number>;
+    mateInOneMoves: Move[];
+  };
+}
+
 /**
- * Pick a move directly from a net's policy head — no MCTS, no value-
- * based reward search. The point is to ask the net "what would the user
- * play here?" the same way the imitator was trained to answer.
+ * Pick a move the imitator would play from `state`.
  *
- * This is the imitator's "play yourself" move-selection function, used
- * by the play-against-imitator UI. Reuses `policyFromNet` from
- * core/opponent so legal-move masking + renormalization stays a single
- * source of truth.
+ * Two modes:
  *
- * `temperature = 0` (default): greedy argmax over the masked priors.
- * Ties broken lexicographically by UCI string for determinism.
+ * - **MCTS mode** (`options.search` provided, default in the UI): runs
+ *   the same `search()` MCTS the opponent and self-play use, with the
+ *   imitator's net supplying priors and value. The mate-in-1 override
+ *   baked into `search` applies; this is the project's one approved
+ *   heuristic ("checkmate is terminal") and is also what self-play uses
+ *   when the imitator moves there, so MCTS-vs-imitator play is the
+ *   same algorithm as in-loop self-play.
  *
- * `temperature > 0`: sample proportional to `P^(1/T)` over the legal
- * moves, using `rng` (defaults to `Math.random`).
+ * - **Policy-head mode** (`options.search` absent): asks the net "what
+ *   would the user play here?" directly, no value-based lookahead.
+ *   Greedy by default; `temperature > 0` samples ∝ P^(1/T). Useful for
+ *   tests and for an interpretability view that shows the raw policy
+ *   without MCTS smoothing it out.
+ *
+ * Reuses `policyFromNet` from core/opponent so legal-move masking +
+ * renormalization stays a single source of truth.
  *
  * Throws if `state` is terminal — callers should never reach here.
- *
- * Notes on heuristics: this function deliberately does NOT add any
- * mate-in-1 override or rules-based search the way `core/opponent`'s
- * `selectMove` does. The imitator's job is behaviour-cloning of the
- * user; any "always seize the mate" behaviour must come from the
- * imitator's policy head learning the corrective targets produced by
- * `buildImitationExamples`, not from a heuristic baked into selection.
  */
 export async function selectImitatorMove(
   net: ChessNet,
   state: GameState,
-  options: { temperature?: number; rng?: () => number } = {},
-): Promise<{ move: Move; priors: Map<Move, number> }> {
+  options: ImitatorSelectOptions = {},
+): Promise<ImitatorSelectResult> {
   if (isTerminal(state)) {
     throw new Error('selectImitatorMove: called on a terminal GameState');
   }
@@ -78,11 +120,30 @@ export async function selectImitatorMove(
     throw new Error('selectImitatorMove: no legal moves at non-terminal state');
   }
 
-  const { priors } = await policyFromNet(net).evaluate(state);
+  const policy = policyFromNet(net);
   const temperature = options.temperature ?? 0;
 
+  if (options.search !== undefined) {
+    const result = await search(state, policy, {
+      ...options.search,
+      rng: options.search.rng ?? options.rng,
+    });
+    const { rootValue, visitCounts, priorPolicy, edgeValues, mateInOneMoves } = result;
+    const move =
+      mateInOneMoves.length > 0
+        ? mateInOneMoves[0]
+        : pickFromVisits(visitCounts, priorPolicy, temperature, options.rng);
+    return {
+      move,
+      priors: priorPolicy,
+      search: { rootValue, visitCounts, edgeValues, mateInOneMoves },
+    };
+  }
+
+  // Raw policy-head path.
+  const { priors } = await policy.evaluate(state);
+
   if (temperature === 0 || moves.length === 1) {
-    // Greedy: argmax of the masked prior, ties broken lex by UCI string.
     let bestMove = moves[0];
     let bestP = priors.get(bestMove) ?? 0;
     for (const m of moves) {
@@ -95,14 +156,10 @@ export async function selectImitatorMove(
     return { move: bestMove, priors };
   }
 
-  // Temperature sampling: weight ∝ P^(1/T) over legal moves.
   const invT = 1 / temperature;
   const weights = moves.map(m => Math.pow(priors.get(m) ?? 0, invT));
   const total = weights.reduce((a, b) => a + b, 0);
   if (total === 0) {
-    // Every legal move had zero prior (e.g. a freshly-initialized net
-    // whose softmax collapsed onto illegal indices). Fall back to a
-    // uniform draw so the game keeps progressing.
     const idx = Math.floor((options.rng ?? Math.random)() * moves.length);
     return { move: moves[Math.min(idx, moves.length - 1)], priors };
   }
@@ -112,8 +169,50 @@ export async function selectImitatorMove(
     cumulative += weights[i];
     if (draw < cumulative) return { move: moves[i], priors };
   }
-  // Floating-point rounding fallback.
   return { move: moves[moves.length - 1], priors };
+}
+
+function pickFromVisits(
+  visitCounts: Map<Move, number>,
+  priors: Map<Move, number>,
+  temperature: number,
+  rng: (() => number) | undefined,
+): Move {
+  const entries = Array.from(visitCounts.entries());
+  if (entries.length === 0) {
+    throw new Error('pickFromVisits: empty visit-count map (root had no legal moves?)');
+  }
+  if (temperature === 0 || entries.length === 1) {
+    // Argmax of visits; ties broken by prior, then lex by UCI for determinism.
+    let bestMove = entries[0][0];
+    let bestN = entries[0][1];
+    let bestP = priors.get(bestMove) ?? 0;
+    for (let i = 1; i < entries.length; i++) {
+      const [m, n] = entries[i];
+      const p = priors.get(m) ?? 0;
+      if (n > bestN || (n === bestN && p > bestP) || (n === bestN && p === bestP && m < bestMove)) {
+        bestMove = m;
+        bestN = n;
+        bestP = p;
+      }
+    }
+    return bestMove;
+  }
+  // Sample ∝ N^(1/T).
+  const invT = 1 / temperature;
+  const weights = entries.map(([, n]) => Math.pow(n, invT));
+  const total = weights.reduce((a, b) => a + b, 0);
+  if (total === 0) {
+    const idx = Math.floor((rng ?? Math.random)() * entries.length);
+    return entries[Math.min(idx, entries.length - 1)][0];
+  }
+  const draw = (rng ?? Math.random)() * total;
+  let cumulative = 0;
+  for (let i = 0; i < entries.length; i++) {
+    cumulative += weights[i];
+    if (draw < cumulative) return entries[i][0];
+  }
+  return entries[entries.length - 1][0];
 }
 
 export interface PlayerImitator {
@@ -126,15 +225,15 @@ export interface PlayerImitator {
   recordUserMoves(userMoves: GameMoveRecord[], finalOutcome: Outcome): void;
 
   /**
-   * Pick a move from this imitator's policy head. Thin wrapper around
+   * Pick a move from this imitator. Thin wrapper around
    * `selectImitatorMove(net, state, …)` for callers that already hold a
-   * `PlayerImitator`. See `selectImitatorMove` for the temperature /
-   * tie-breaking semantics.
+   * `PlayerImitator`. See `selectImitatorMove` for MCTS vs raw-policy
+   * mode semantics.
    */
   selectMove(
     state: GameState,
-    options?: { temperature?: number; rng?: () => number },
-  ): Promise<{ move: Move; priors: Map<Move, number> }>;
+    options?: ImitatorSelectOptions,
+  ): Promise<ImitatorSelectResult>;
 
   /**
    * One gradient step on a minibatch sampled from the replay buffer.
@@ -171,8 +270,8 @@ export function createPlayerImitator(
 
   const selectMove = (
     state: GameState,
-    options: { temperature?: number; rng?: () => number } = {},
-  ): Promise<{ move: Move; priors: Map<Move, number> }> =>
+    options: ImitatorSelectOptions = {},
+  ): Promise<ImitatorSelectResult> =>
     selectImitatorMove(net, state, options);
 
   const trainStep = async (

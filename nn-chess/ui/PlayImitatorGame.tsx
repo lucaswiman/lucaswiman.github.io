@@ -7,10 +7,12 @@
 //     every finished game here still feeds `imitator.recordUserMoves`.
 //
 // Differences from the main `Game.tsx`:
-//   - The opponent for each move is the imitator (no MCTS, no value
-//     search). Moves come straight from the imitator's policy head via
-//     `imitator.selectMove(state)`. See core/imitator/index.ts for why
-//     that's still consistent with the README's "no heuristics" rule.
+//   - The opponent for each move is the imitator. Move selection runs
+//     the same MCTS the opponent and self-play use, with the imitator's
+//     net providing priors and value. That matches how `core/selfplay`
+//     already drives the imitator and keeps the only project-approved
+//     heuristic ("checkmate is terminal") consistent across all
+//     surfaces. See `core/imitator/selectImitatorMove`.
 //   - There's no training UI here: no opponent self-play, no Stockfish,
 //     no gradient-step controls. Training continues to happen on the
 //     main page; this route's only side-effect is appending to the
@@ -36,6 +38,7 @@ import type { BlobStorage } from '../core/storage/index.js';
 import {
   createOpponentStorage,
   loadPlayerImitatorFromStorage,
+  OPPONENT_CONFIG,
 } from './opponent-config.js';
 
 type PlayerColor = 'w' | 'b';
@@ -72,9 +75,11 @@ export default function PlayImitatorGame() {
   const [playerColor, setPlayerColor] = useState<PlayerColor>('w');
   // Non-zero temperature lets the imitator vary its play across games so
   // the page is actually useful for "is the model multimodal?" inspection.
-  // Default is 0 (greedy) to match the imitator's training objective; the
-  // user can opt into sampling via the toggle below.
+  // Default is 0 (greedy argmax over MCTS visit counts).
   const [temperature, setTemperature] = useState(0);
+  // MCTS simulation budget per imitator move. Matches the opponent's
+  // default (`OPPONENT_CONFIG.simulations`) so play feels comparable.
+  const [simulations, setSimulations] = useState(OPPONENT_CONFIG.simulations);
   const [session, setSession] = useState<Session>(freshSession);
   const [thinking, setThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -129,7 +134,13 @@ export default function PlayImitatorGame() {
     setThinking(true);
 
     const capturedState = session.state;
-    imitator.selectMove(capturedState, { temperature })
+    imitator.selectMove(capturedState, {
+      search: {
+        simulations,
+        cPuct: OPPONENT_CONFIG.cPuct,
+      },
+      temperature,
+    })
       .then(({ move }) => {
         imitatorMoveInFlight.current = false;
 
@@ -163,7 +174,7 @@ export default function PlayImitatorGame() {
         setThinking(false);
         setError(`Imitator move failed: ${err instanceof Error ? err.message : String(err)}`);
       });
-  }, [imitator, session, playerColor, temperature]);
+  }, [imitator, session, playerColor, temperature, simulations]);
 
   // When the game ends, train the imitator on the user's own moves
   // (exactly like the main page does). Imitator-side moves are
@@ -255,9 +266,22 @@ export default function PlayImitatorGame() {
         ))}
       </div>
 
-      <div style={{ marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ marginBottom: '12px', display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
         <label style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: 'pointer' }}>
-          <strong>Imitator temperature:</strong>
+          <strong>MCTS sims:</strong>
+          <input
+            type="range"
+            min={1}
+            max={256}
+            step={1}
+            value={simulations}
+            onChange={e => setSimulations(Number(e.target.value))}
+            style={{ width: '140px' }}
+          />
+          <span style={{ fontFamily: 'monospace', minWidth: '3em' }}>{simulations}</span>
+        </label>
+        <label style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: 'pointer' }}>
+          <strong>Temperature:</strong>
           <input
             type="range"
             min={0}
@@ -269,9 +293,10 @@ export default function PlayImitatorGame() {
           />
           <span style={{ fontFamily: 'monospace', minWidth: '2.5em' }}>{temperature.toFixed(1)}</span>
         </label>
-        <span style={{ fontSize: '0.85em', color: '#666' }}>
-          0 = greedy (deterministic); higher = more variety in the imitator's replies.
-        </span>
+      </div>
+      <div style={{ marginBottom: '12px', fontSize: '0.85em', color: '#666' }}>
+        More sims = stronger MCTS lookahead per imitator move (and slower).
+        Temperature 0 picks the most-visited move; higher samples ∝ N^(1/T) for variety.
       </div>
 
       <div style={{ marginBottom: '8px', minHeight: '24px' }}>
