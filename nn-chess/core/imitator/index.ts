@@ -19,7 +19,12 @@ import {
   NN_VERSION,
   type TrainResult,
 } from '../nn/index.js';
-import type { Outcome } from '../rules/index.js';
+import type { GameState, Outcome } from '../rules/index.js';
+import {
+  selectMoveFromNet,
+  type MoveSelectionOptions,
+  type MoveSelectionResult,
+} from '../move-selection/index.js';
 import {
   createReplayBuffer,
   deserializeReplayBuffer,
@@ -45,6 +50,17 @@ export interface PlayerImitator {
    * user's side.
    */
   recordUserMoves(userMoves: GameMoveRecord[], finalOutcome: Outcome): void;
+
+  /**
+   * Pick a move from this imitator. Thin wrapper around
+   * `selectMoveFromNet(net, state, …)` for callers that already hold a
+   * `PlayerImitator`. See `core/move-selection` for MCTS vs raw-policy
+   * mode semantics.
+   */
+  selectMove(
+    state: GameState,
+    options?: MoveSelectionOptions,
+  ): Promise<MoveSelectionResult>;
 
   /**
    * One gradient step on a minibatch sampled from the replay buffer.
@@ -79,6 +95,12 @@ export function createPlayerImitator(
     replayBuffer.addAll(examples);
   };
 
+  const selectMove = (
+    state: GameState,
+    options: MoveSelectionOptions = {},
+  ): Promise<MoveSelectionResult> =>
+    selectMoveFromNet(net, state, options);
+
   const trainStep = async (
     batchSize: number,
     rng?: () => number,
@@ -99,6 +121,7 @@ export function createPlayerImitator(
 
   return {
     recordUserMoves,
+    selectMove,
     trainStep,
     saveTo,
     get net() { return net; },

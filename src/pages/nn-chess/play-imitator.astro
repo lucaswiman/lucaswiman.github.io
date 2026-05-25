@@ -1,0 +1,38 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PlayImitatorGame from '../../../nn-chess/ui/PlayImitatorGame.tsx';
+---
+<BaseLayout title="nn-chess — play the imitator" description="Play directly against the player-imitator network" useMath={false} pwa="nn-chess">
+  <h1>nn-chess — play the imitator</h1>
+  <p>
+    <a href="/nn-chess">← back to play the opponent</a>
+  </p>
+  <p>
+    Play directly against the <em>player-imitator</em> network — the
+    behaviour-clone of your own moves that the main page trains in the
+    background. Two reasons this exists:
+  </p>
+  <ul>
+    <li>
+      <strong>Interpretability.</strong> Does the imitator actually play like
+      you? Playing against it is the most direct way to find out.
+    </li>
+    <li>
+      <strong>More data per session.</strong> Every move you play here is
+      recorded into the imitator's replay buffer at game end, exactly like the
+      main page, so you can pile on training examples without having to slog
+      through a full game against the (early, terrible) opponent network.
+    </li>
+  </ul>
+  <p>
+    Move selection is from the imitator's raw policy head — no MCTS, no value
+    search. That keeps the imitator a pure behaviour-cloning model of you,
+    consistent with the
+    <a href="https://github.com/lucaswiman/lucaswiman.github.io/blob/main/nn-chess/README.md">README's</a>
+    rule against adding chess heuristics.
+  </p>
+
+  <div style="max-width: 620px; margin: 0 auto;">
+    <PlayImitatorGame client:only="react" />
+  </div>
+</BaseLayout>

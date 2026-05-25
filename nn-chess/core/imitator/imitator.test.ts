@@ -6,6 +6,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import * as tf from '@tensorflow/tfjs';
 import { createPlayerImitator, IMITATOR_STORAGE_KEYS } from './index.js';
+import { selectMoveFromNet } from '../move-selection/index.js';
 import { createReplayBuffer } from '../training/index.js';
 import { createMemoryStorage } from '../../adapters/storage-memory.js';
 import { buildImitationExamples, type GameMoveRecord } from '../opponent/index.js';
@@ -17,6 +18,7 @@ import {
 } from '../nn/index.js';
 import { FEATURE_COUNT } from '../encoding/index.js';
 import { policyIndexFromUci } from '../nn/index.js';
+import { initialState } from '../rules/index.js';
 
 // Minimal ChessNet stand-in. Only the methods the imitator actually
 // calls (trainBatch, serialize) need to behave; everything else throws
@@ -151,6 +153,27 @@ describe('PlayerImitator', () => {
         IMITATOR_STORAGE_KEYS.WEIGHTS,
       ].sort(),
     );
+  });
+});
+
+describe('PlayerImitator.selectMove', () => {
+  beforeAll(async () => {
+    await tf.setBackend('cpu');
+    await tf.ready();
+  });
+
+  it('delegates to selectMoveFromNet with the underlying net', async () => {
+    const buf = createReplayBuffer(10);
+    const net = ChessNet.create({ seed: 31 });
+    try {
+      const imitator = createPlayerImitator({ net, replayBuffer: buf });
+      const state = initialState();
+      const viaInstance = await imitator.selectMove(state);
+      const viaFn = await selectMoveFromNet(net, state);
+      expect(viaInstance.move).toBe(viaFn.move);
+    } finally {
+      net.dispose();
+    }
   });
 });
 

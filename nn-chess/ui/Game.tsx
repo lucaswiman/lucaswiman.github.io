@@ -31,6 +31,8 @@ import type { Opponent, GameMoveRecord } from '../core/opponent/index.js';
 import { legalMoveIndicesFor, mateInOneIndicesFor, OPPONENT_STORAGE_KEYS } from '../core/opponent/index.js';
 import type { PlayerImitator } from '../core/imitator/index.js';
 import { IMITATOR_STORAGE_KEYS } from '../core/imitator/index.js';
+import { selectMoveFromNet } from '../core/move-selection/index.js';
+import MctsToggle from './MctsToggle.js';
 import type { SearchResult } from '../core/mcts/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
 import { getJson, putJson } from '../core/storage/index.js';
@@ -107,6 +109,13 @@ export default function Game() {
   const [simulations, setSimulations] = useState(OPPONENT_CONFIG.simulations);
   const [cPuct, setCPuct] = useState(OPPONENT_CONFIG.cPuct);
   const [cPuctTipOpen, setCPuctTipOpen] = useState(false);
+  // "Use MCTS" toggle. When on (the default, preserving today's
+  // behaviour) the opponent runs full MCTS via `opponent.selectMove`.
+  // When off, the opponent picks straight from its policy head, which is
+  // much faster but skips the visit-count lookahead the inspector panel
+  // visualises. The sims + cPuct sliders are still rendered but greyed
+  // out so the user understands what the toggle gates.
+  const [useMcts, setUseMcts] = useState(true);
   // Shared log fed by every training-side panel. Lets the user see
   // gradient-descent vs MCTS phase transitions and storage saves
   // without staring at the console.
@@ -377,10 +386,27 @@ export default function Game() {
 
     const capturedState = session.state;
 
-    opponent.selectMove(capturedState).then(({ move, rootValue, visitCounts, priorPolicy, edgeValues }) => {
+    // MCTS branch goes through Opponent.selectMove for its rich return
+    // shape (visit counts etc. consumed by the inspector). The
+    // policy-head branch reuses the generic selectMoveFromNet from
+    // core/move-selection; T=0 keeps it deterministic.
+    const moveSelection: Promise<{ move: Move; mctsResult: SearchResult | null }> = useMcts
+      ? opponent.selectMove(capturedState).then(r => ({
+          move: r.move,
+          mctsResult: { ...r, bestMove: r.move, mateInOneMoves: [] as Move[] },
+        }))
+      : selectMoveFromNet(opponent.net, capturedState, { temperature: 0 }).then(r => ({
+          move: r.move,
+          mctsResult: null,
+        }));
+
+    moveSelection.then(({ move, mctsResult }) => {
       opponentMoveInFlight.current = false;
 
-      setLastSearch({ bestMove: move, rootValue, visitCounts, priorPolicy, edgeValues, mateInOneMoves: [] });
+      // When MCTS is off `mctsResult` is null — clear `lastSearch` so
+      // `LastMoveMcts` / `InspectorPanel` render their existing "no
+      // search yet" placeholder instead of a misleading 0-visit table.
+      setLastSearch(mctsResult);
 
       const record: GameMoveRecord = {
         features: encodeState(capturedState),
@@ -411,7 +437,7 @@ export default function Game() {
       setOpponentThinking(false);
       setError(`Opponent move failed: ${err instanceof Error ? err.message : String(err)}`);
     });
-  }, [opponent, session, playerColor]);
+  }, [opponent, session, playerColor, useMcts]);
 
   useEffect(() => {
     if (!session.over) return;
@@ -780,18 +806,18 @@ export default function Game() {
 
       <div style={{ marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
         <strong>Strength:</strong>
-        <input
-          type="range"
-          min={16}
-          max={400}
+        <MctsToggle
+          useMcts={useMcts}
+          onUseMctsChange={setUseMcts}
+          simulations={simulations}
+          onSimulationsChange={setSimulations}
+          minSims={16}
+          maxSims={400}
           step={16}
-          value={simulations}
-          onChange={e => setSimulations(Number(e.target.value))}
-          style={{ width: '120px' }}
+          simsSuffix="sims/move"
         />
-        <span style={{ fontSize: '0.9em', color: '#555' }}>{simulations} sims/move</span>
         <span style={{ fontSize: '0.9em', color: '#888' }}>|</span>
-        <label style={{ fontSize: '0.9em', color: '#555', display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <label style={{ fontSize: '0.9em', color: useMcts ? '#555' : '#aaa', display: 'flex', gap: '8px', alignItems: 'center' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
             explore (cPuct):
             <span
@@ -835,7 +861,8 @@ export default function Game() {
             step={0.25}
             value={cPuct}
             onChange={e => setCPuct(Number(e.target.value))}
-            style={{ width: '100px' }}
+            disabled={!useMcts}
+            style={{ width: '100px', opacity: useMcts ? 1 : 0.4 }}
           />
           <span style={{ fontFamily: 'monospace' }}>{cPuct.toFixed(2)}</span>
         </label>

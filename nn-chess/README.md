@@ -55,6 +55,27 @@ Down the road we will also let the user point the opponent at a known-
 strong external player (e.g. Stockfish via a worker) and watch it
 learn from those games.
 
+### Play-the-imitator mode
+
+There is also a dedicated route, **`/nn-chess/play-imitator`**, where the
+user plays directly against the player-imitator instead of the opponent.
+It exists as an interpretability tool — "does the imitator actually play
+like me?" — and as a way to harvest more imitator training examples per
+session without having to grind through full games against the (early,
+terrible) opponent network. Move selection here runs the same MCTS
+`search()` the opponent and self-play use, with the imitator's net
+supplying priors and value; the page exposes a sims slider and a
+visit-count sampling temperature. This mirrors how `core/selfplay`
+already drives the imitator and means the only project-approved
+heuristic ("checkmate is terminal") behaves identically across all
+surfaces. A raw-policy-head path is still available on
+`selectMoveFromNet` (in `core/move-selection`) for tests and for future interpretability views
+that want to see what the policy says before MCTS smooths it out.
+Finished games on this page feed `imitator.recordUserMoves(...)` on the
+user's own moves only — the imitator's own moves are never routed back
+into its replay buffer, so the "user-only training signal" invariant
+holds.
+
 The app lives at the route **`/nn-chess`** on this site, is built as part
 of the normal Astro / GitHub Actions pipeline, and persists trained
 network weights in the browser (via `localStorage` for now, but behind an
