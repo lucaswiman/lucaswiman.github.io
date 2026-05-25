@@ -5,3 +5,4 @@ node_modules
 dist
 .astro
 _notebooks/.ipynb_checkpoints
+.claude/
