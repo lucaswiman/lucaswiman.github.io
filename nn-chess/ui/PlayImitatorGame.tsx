@@ -80,6 +80,11 @@ export default function PlayImitatorGame() {
   // MCTS simulation budget per imitator move. Matches the opponent's
   // default (`OPPONENT_CONFIG.simulations`) so play feels comparable.
   const [simulations, setSimulations] = useState(OPPONENT_CONFIG.simulations);
+  // "Use MCTS" toggle. Default on (today's behaviour). When off the
+  // imitator picks straight from its policy head — that's already a
+  // first-class mode of `selectImitatorMove`, so we just omit `search`
+  // and let temperature apply to the raw policy instead of visit counts.
+  const [useMcts, setUseMcts] = useState(true);
   const [session, setSession] = useState<Session>(freshSession);
   const [thinking, setThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -135,10 +140,11 @@ export default function PlayImitatorGame() {
 
     const capturedState = session.state;
     imitator.selectMove(capturedState, {
-      search: {
-        simulations,
-        cPuct: OPPONENT_CONFIG.cPuct,
-      },
+      // Omitting `search` is the raw-policy-head path — `temperature`
+      // still applies (it samples ∝ P^(1/T) on the policy directly).
+      search: useMcts
+        ? { simulations, cPuct: OPPONENT_CONFIG.cPuct }
+        : undefined,
       temperature,
     })
       .then(({ move }) => {
@@ -174,7 +180,7 @@ export default function PlayImitatorGame() {
         setThinking(false);
         setError(`Imitator move failed: ${err instanceof Error ? err.message : String(err)}`);
       });
-  }, [imitator, session, playerColor, temperature, simulations]);
+  }, [imitator, session, playerColor, temperature, simulations, useMcts]);
 
   // When the game ends, train the imitator on the user's own moves
   // (exactly like the main page does). Imitator-side moves are
@@ -267,8 +273,16 @@ export default function PlayImitatorGame() {
       </div>
 
       <div style={{ marginBottom: '12px', display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
-        <label style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: 'pointer' }}>
-          <strong>MCTS sims:</strong>
+        <label style={{ display: 'flex', gap: '6px', alignItems: 'center', cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={useMcts}
+            onChange={e => setUseMcts(e.target.checked)}
+          />
+          <strong>Use MCTS</strong>
+        </label>
+        <label style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: useMcts ? 'pointer' : 'not-allowed' }}>
+          <strong style={{ color: useMcts ? undefined : '#aaa' }}>MCTS sims:</strong>
           <input
             type="range"
             min={1}
@@ -276,9 +290,10 @@ export default function PlayImitatorGame() {
             step={1}
             value={simulations}
             onChange={e => setSimulations(Number(e.target.value))}
-            style={{ width: '140px' }}
+            disabled={!useMcts}
+            style={{ width: '140px', opacity: useMcts ? 1 : 0.4 }}
           />
-          <span style={{ fontFamily: 'monospace', minWidth: '3em' }}>{simulations}</span>
+          <span style={{ fontFamily: 'monospace', minWidth: '3em', color: useMcts ? undefined : '#aaa' }}>{simulations}</span>
         </label>
         <label style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: 'pointer' }}>
           <strong>Temperature:</strong>
@@ -295,8 +310,17 @@ export default function PlayImitatorGame() {
         </label>
       </div>
       <div style={{ marginBottom: '12px', fontSize: '0.85em', color: '#666' }}>
-        More sims = stronger MCTS lookahead per imitator move (and slower).
-        Temperature 0 picks the most-visited move; higher samples ∝ N^(1/T) for variety.
+        {useMcts ? (
+          <>
+            More sims = stronger MCTS lookahead per imitator move (and slower).
+            Temperature 0 picks the most-visited move; higher samples ∝ N^(1/T) for variety.
+          </>
+        ) : (
+          <>
+            MCTS off — moves are sampled straight from the imitator&apos;s policy head.
+            Temperature 0 picks argmax; higher samples ∝ P^(1/T).
+          </>
+        )}
       </div>
 
       <div style={{ marginBottom: '8px', minHeight: '24px' }}>
