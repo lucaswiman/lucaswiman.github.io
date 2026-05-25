@@ -1,0 +1,23 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PlayMaiaGame from '../../../nn-chess/ui/PlayMaiaGame.tsx';
+---
+<BaseLayout title="nn-chess — play Maia-2" description="Play against the Maia-2 human-style chess engine at a chosen strength" useMath={false} pwa="nn-chess">
+  <h1>nn-chess — play against Maia-2</h1>
+  <p>
+    <a href="/nn-chess">← back to play</a>
+  </p>
+  <p>
+    Play a game against the{' '}
+    <a href="https://github.com/CSSLab/maia2">Maia-2</a> human-style chess
+    engine at any of the 11 strength buckets it was trained on
+    (≈ &lt;1100 to ≥2000). Maia is a frozen third-party network — this
+    page treats it as a sparring partner, not as training data for the
+    nn-chess opponent. Your own moves still train the player-imitator
+    network the same way they do everywhere else.
+  </p>
+
+  <div style="max-width: 620px; margin: 0 auto;">
+    <PlayMaiaGame client:only="react" />
+  </div>
+</BaseLayout>
