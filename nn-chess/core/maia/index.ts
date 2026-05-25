@@ -53,5 +53,11 @@ export type {
   MaiaActivationName,
 } from './model.js';
 
-export { MaiaEngine } from './engine.js';
-export type { MaiaSelectMoveOptions, MaiaSelectMoveResult } from './engine.js';
+export { MaiaEngine, maiaPolicy } from './engine.js';
+export type {
+  MaiaSelectMoveOptions,
+  MaiaSelectMoveResult,
+  MaiaPolicyAndValueOptions,
+  MaiaPolicyAndValueResult,
+  MaiaPolicy,
+} from './engine.js';

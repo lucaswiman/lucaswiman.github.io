@@ -54,6 +54,29 @@ export interface MaiaSelectMoveResult {
   rootValue: number;
 }
 
+export interface MaiaPolicyAndValueOptions {
+  /** Skill rating in [<1100, >=2000]; mapped to one of 11 buckets. */
+  elo: number;
+  /** Estimated opponent skill (defaults to `elo`). */
+  oppoElo?: number;
+}
+
+export interface MaiaPolicyAndValueResult {
+  /**
+   * Probability mass on each legal move (un-mirrored UCI), masked +
+   * softmax-normalized. Sums to ≈ 1 modulo floating-point drift.
+   */
+  priors: Map<Move, number>;
+  /**
+   * Value from `state`'s side-to-move's perspective, in roughly [-1, 1].
+   * Maia always trains on white-to-move positions (the encoder mirrors
+   * black-to-move boards before the forward pass), so the value-head
+   * scalar is already from the mirrored STM's perspective — i.e.
+   * `state`'s STM in the un-mirrored frame. No sign flip needed.
+   */
+  value: number;
+}
+
 export class MaiaEngine {
   private readonly weights: MaiaWeights;
 
@@ -65,14 +88,28 @@ export class MaiaEngine {
   static readonly ELO_BUCKETS = MAIA_ELO_BUCKETS;
 
   /**
-   * Pick a move from the given position at the requested skill level.
-   * Throws if the position has no legal moves (caller should check
-   * `isTerminal` first).
+   * Run the Maia forward pass on `state` and return the policy-head
+   * distribution over legal moves (masked + softmax-normalized) plus
+   * the value-head scalar.
+   *
+   * Shaped to satisfy MCTS's `Policy.evaluate` contract once wrapped by
+   * `maiaPolicy(...)`. Reuses the same encode + mirror handling
+   * `selectMove` does so there is only one Maia forward-pass path.
+   *
+   * Returns priors keyed by the *un-mirrored* UCI string (i.e. the move
+   * as it appears in the input position), and the value already from
+   * `state`'s side-to-move perspective — see comment on
+   * `MaiaPolicyAndValueResult.value` for why no flip is needed.
+   *
+   * Throws on terminal positions.
    */
-  selectMove(state: GameState, options: MaiaSelectMoveOptions): MaiaSelectMoveResult {
+  evaluatePolicyAndValue(
+    state: GameState,
+    options: MaiaPolicyAndValueOptions,
+  ): MaiaPolicyAndValueResult {
     const legal = legalMoves(state);
     if (legal.length === 0) {
-      throw new Error('MaiaEngine.selectMove called on a terminal position');
+      throw new Error('MaiaEngine.evaluatePolicyAndValue called on a terminal position');
     }
 
     const { features, mirrored } = encodeForMaia(state);
@@ -125,12 +162,32 @@ export class MaiaEngine {
       for (let i = 0; i < probs.length; i++) probs[i] = u;
     }
 
-    const moveProbs = new Map<Move, number>();
-    for (let i = 0; i < legal.length; i++) moveProbs.set(legal[i], probs[i]);
+    // Key the priors by the un-mirrored UCI (the move as it appears in
+    // the input position). selectMove and MCTS both consume this map
+    // directly, so this is the single source of truth.
+    const priors = new Map<Move, number>();
+    for (let i = 0; i < legal.length; i++) priors.set(legal[i], probs[i]);
 
-    // Sample or argmax.
+    return { priors, value };
+  }
+
+  /**
+   * Pick a move from the given position at the requested skill level.
+   * Throws if the position has no legal moves (caller should check
+   * `isTerminal` first).
+   */
+  selectMove(state: GameState, options: MaiaSelectMoveOptions): MaiaSelectMoveResult {
+    const { priors, value } = this.evaluatePolicyAndValue(state, {
+      elo: options.elo,
+      oppoElo: options.oppoElo,
+    });
+
+    const legal = Array.from(priors.keys());
+    const probs = new Float32Array(legal.length);
+    for (let i = 0; i < legal.length; i++) probs[i] = priors.get(legal[i]) ?? 0;
+    const moveProbs = priors;
+
     const temperature = options.temperature ?? 0;
-    let chosenIdx = 0;
     if (temperature === 0) {
       // Greedy: pick highest prob, break ties by lexicographic UCI
       // (same convention as Opponent.selectMove).
@@ -141,43 +198,85 @@ export class MaiaEngine {
         if (p > bestP || (p === bestP && legal[i] < best)) {
           bestP = p;
           best = legal[i];
-          chosenIdx = i;
         }
       }
       return { move: best, moveProbs, rootValue: value };
     }
 
-    // Temperature sampling.
+    // Temperature sampling. Re-softmax the *probabilities* into
+    // tempered weights: w_i ∝ probs[i]^(1/T). We don't have direct
+    // access to the original logits any more, but in floating point
+    // log(p)/T then exp() gives the same distribution up to constants,
+    // so we apply the exponent directly.
     const rng = options.rng ?? Math.random;
-    if (temperature !== 1) {
-      // Re-softmax with the requested temperature.
-      let s = 0;
-      for (let i = 0; i < probs.length; i++) {
-        probs[i] = Math.exp((logits[i] - max) / temperature);
-        s += probs[i];
-      }
-      if (s > 0) {
-        for (let i = 0; i < probs.length; i++) probs[i] /= s;
-      }
+    const invT = 1 / temperature;
+    const weights = new Float32Array(legal.length);
+    let wsum = 0;
+    for (let i = 0; i < legal.length; i++) {
+      const w = Math.pow(probs[i], invT);
+      weights[i] = w;
+      wsum += w;
+    }
+    if (wsum > 0) {
+      for (let i = 0; i < weights.length; i++) weights[i] /= wsum;
+    } else {
+      const u = 1 / weights.length;
+      for (let i = 0; i < weights.length; i++) weights[i] = u;
     }
     const draw = rng();
     let cum = 0;
+    let chosenIdx = legal.length - 1;
     for (let i = 0; i < legal.length; i++) {
-      cum += probs[i];
+      cum += weights[i];
       if (draw < cum) {
         chosenIdx = i;
         break;
       }
-      chosenIdx = i;
     }
-    const chosen = legal[chosenIdx];
-    return { move: chosen, moveProbs, rootValue: value };
+    return { move: legal[chosenIdx], moveProbs, rootValue: value };
   }
 
   /** Tear down the weight tensors. The engine becomes unusable. */
   dispose(): void {
     this.weights.dispose();
   }
+}
+
+// ── MCTS Policy adapter ──────────────────────────────────────────────────────
+
+/**
+ * Thin adapter that lets `core/mcts.search` consume a Maia engine as a
+ * `Policy`. Each `evaluate(state)` delegates to
+ * `engine.evaluatePolicyAndValue(...)` and resolves synchronously
+ * (Promise-wrapped only to satisfy the async interface).
+ *
+ * Note: Maia's forward pass is heavy (~6-10s per call on WASM/CPU on
+ * commodity hardware). Each MCTS simulation costs one forward pass, so
+ * call sites should keep the simulation budget small. The play-Maia
+ * page caps the user-visible slider at 16 sims for this reason.
+ *
+ * The `Policy` interface lives in `core/mcts`. We import it via a
+ * type-only import to keep this module from depending on MCTS internals
+ * (which it doesn't otherwise touch).
+ */
+export interface MaiaPolicy {
+  evaluate(state: GameState): Promise<{ priors: Map<Move, number>; value: number }>;
+}
+
+export function maiaPolicy(
+  engine: MaiaEngine,
+  elo: number,
+  oppoElo?: number,
+): MaiaPolicy {
+  return {
+    async evaluate(state: GameState) {
+      const { priors, value } = engine.evaluatePolicyAndValue(state, {
+        elo,
+        oppoElo,
+      });
+      return { priors, value };
+    },
+  };
 }
 
 // Re-export for convenience so consumers can `import { MAIA_MOVES } from .../engine`.

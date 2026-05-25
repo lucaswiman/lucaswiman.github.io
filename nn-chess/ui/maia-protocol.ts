@@ -32,6 +32,28 @@ export type MaiaRequest =
       oppoElo?: number;
       /** 0 = greedy argmax; >0 = temperature sampling. */
       temperature?: number;
+    }
+  | {
+      // Like `select-move`, but routes through `core/mcts.search` with
+      // `maiaPolicy` providing priors + value. Each simulation costs one
+      // full Maia forward pass, which is the same WASM/CPU bottleneck
+      // the `select-move` path hits — so the UI caps the simulation
+      // budget at a small number to keep per-move latency bounded.
+      kind: 'search-move';
+      requestId: number;
+      fen: string;
+      elo: number;
+      oppoElo?: number;
+      /** MCTS simulation budget. */
+      simulations: number;
+      /** PUCT exploration constant; mirrors `OPPONENT_CONFIG.cPuct`. */
+      cPuct: number;
+      /**
+       * Visit-count sampling temperature.
+       * 0 = argmax over visits; >0 samples ∝ N^(1/T). Mirrors the
+       * temperature semantics of `selectImitatorMove` with `search` set.
+       */
+      temperature?: number;
     };
 
 /** Messages sent FROM the worker TO the main thread. */
@@ -44,5 +66,11 @@ export type MaiaResponse =
       value: number;
       /** Probability mass on each legal move, keyed by UCI string. */
       moveProbs: Record<string, number>;
+      /**
+       * Set when this response is the result of a `search-move` request.
+       * Carries MCTS visit counts so the UI can render a parallel
+       * inspector readout if desired.
+       */
+      visitCounts?: Record<string, number>;
     }
   | { kind: 'error'; requestId?: number; message: string };

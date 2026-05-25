@@ -187,6 +187,7 @@ export class MaiaClient {
       move: string;
       value: number;
       moveProbs: Map<string, number>;
+      visitCounts?: Map<string, number>;
     }) => void;
     reject: (err: Error) => void;
   }>();
@@ -256,6 +257,53 @@ export class MaiaClient {
     });
   }
 
+  /**
+   * Ask the worker for an MCTS-driven move. Same return shape as
+   * `selectMove`, plus a `visitCounts` map populated by `core/mcts`.
+   *
+   * Each MCTS simulation costs one Maia forward pass (~6-10s on
+   * WASM/CPU per the previous Maia agent's measurements), so callers
+   * should keep `simulations` small. The play-Maia UI caps it at 16
+   * and defaults to 4 with a visible caption explaining why.
+   */
+  searchMove(
+    fen: string,
+    elo: number,
+    options: { oppoElo?: number; simulations: number; cPuct: number; temperature?: number },
+  ): Promise<{
+    move: string;
+    value: number;
+    moveProbs: Map<string, number>;
+    visitCounts: Map<string, number>;
+  }> {
+    if (this.disposed) {
+      return Promise.reject(new Error('MaiaClient: disposed'));
+    }
+    const requestId = this.nextRequestId++;
+    return new Promise((resolve, reject) => {
+      this.pending.set(requestId, {
+        resolve: r => resolve({
+          move: r.move,
+          value: r.value,
+          moveProbs: r.moveProbs,
+          visitCounts: r.visitCounts ?? new Map(),
+        }),
+        reject,
+      });
+      const req: MaiaRequest = {
+        kind: 'search-move',
+        requestId,
+        fen,
+        elo,
+        oppoElo: options.oppoElo,
+        simulations: options.simulations,
+        cPuct: options.cPuct,
+        temperature: options.temperature,
+      };
+      this.worker.postMessage(req);
+    });
+  }
+
   /** Terminate the worker. All pending promises will be rejected. */
   dispose(): void {
     if (this.disposed) return;
@@ -283,7 +331,15 @@ export class MaiaClient {
       if (!handler) return;
       this.pending.delete(msg.requestId);
       const probs = new Map<string, number>(Object.entries(msg.moveProbs));
-      handler.resolve({ move: msg.move, value: msg.value, moveProbs: probs });
+      const visits = msg.visitCounts
+        ? new Map<string, number>(Object.entries(msg.visitCounts))
+        : undefined;
+      handler.resolve({
+        move: msg.move,
+        value: msg.value,
+        moveProbs: probs,
+        visitCounts: visits,
+      });
       return;
     }
     if (msg.kind === 'error') {

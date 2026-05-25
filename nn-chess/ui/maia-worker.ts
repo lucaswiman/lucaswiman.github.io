@@ -11,8 +11,9 @@
  * message channel is the only reliable diagnostic path.
  */
 
-import { MaiaEngine, loadMaiaWeights } from '../core/maia/index.js';
+import { MaiaEngine, loadMaiaWeights, maiaPolicy } from '../core/maia/index.js';
 import { fromFen } from '../core/rules/index.js';
+import { search } from '../core/mcts/index.js';
 import { installWorkerErrorHandlers, initBackend } from './worker-init.js';
 import type { MaiaRequest, MaiaResponse } from './maia-protocol.js';
 
@@ -67,10 +68,47 @@ self.addEventListener('message', async (event: MessageEvent<MaiaRequest>) => {
       });
       return;
     }
+    if (msg.kind === 'search-move') {
+      if (engine === null) {
+        send({
+          kind: 'error',
+          requestId: msg.requestId,
+          message: 'Maia worker not initialized — send {kind: "init"} first.',
+        });
+        return;
+      }
+      await backendReady;
+      const state = fromFen(msg.fen);
+      // Each MCTS sim costs one Maia forward pass. We run search()
+      // inside the worker so the main thread isn't blocked round-
+      // tripping per-sim through postMessage, and so we don't pay the
+      // serialization cost of crossing the worker boundary 16+ times
+      // per move.
+      const policy = maiaPolicy(engine, msg.elo, msg.oppoElo);
+      const result = await search(state, policy, {
+        simulations: msg.simulations,
+        cPuct: msg.cPuct,
+      });
+      const moveProbs: Record<string, number> = {};
+      for (const [m, p] of result.priorPolicy) moveProbs[m] = p;
+      const visitCounts: Record<string, number> = {};
+      for (const [m, n] of result.visitCounts) visitCounts[m] = n;
+      send({
+        kind: 'move',
+        requestId: msg.requestId,
+        move: result.bestMove,
+        value: result.rootValue,
+        moveProbs,
+        visitCounts,
+      });
+      return;
+    }
   } catch (err) {
     const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
     const requestId =
-      msg.kind === 'select-move' ? msg.requestId : undefined;
+      msg.kind === 'select-move' || msg.kind === 'search-move'
+        ? msg.requestId
+        : undefined;
     send({ kind: 'error', requestId, message });
   }
 });

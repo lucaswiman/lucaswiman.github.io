@@ -33,6 +33,7 @@ import { MAIA_ELO_BUCKETS } from '../core/maia/index.js';
 import {
   createOpponentStorage,
   loadPlayerImitatorFromStorage,
+  OPPONENT_CONFIG,
 } from './opponent-config.js';
 import {
   MaiaClient,
@@ -80,6 +81,16 @@ export default function PlayMaiaGame() {
 
   const [playerColor, setPlayerColor] = useState<PlayerColor>('w');
   const [eloBucket, setEloBucket] = useState<number>(5); // default 1500-1599
+  // "Use MCTS" toggle. Default OFF on this page: Maia is calibrated for
+  // policy-head argmax at a target ELO, and each MCTS sim costs one
+  // full Maia forward pass (~6-10s on WASM/CPU), so turning MCTS on
+  // both slows play dramatically and biases Maia away from the ELO it
+  // was trained to imitate. Power users who want stronger play can opt
+  // in via the toggle; the small sims cap makes that affordable.
+  const [useMcts, setUseMcts] = useState(false);
+  // MCTS simulation budget when the toggle is on. Capped low (16) and
+  // defaulted to 4 because each sim is a full Maia forward pass.
+  const [maiaSimulations, setMaiaSimulations] = useState(4);
   const [session, setSession] = useState<GameSession>(freshSession);
   const [engineStatus, setEngineStatus] = useState<EngineStatus>({ phase: 'idle' });
   const [maiaThinking, setMaiaThinking] = useState(false);
@@ -162,8 +173,18 @@ export default function PlayMaiaGame() {
     const fen = toFen(session.state);
     const elo = MAIA_ELO_BUCKETS[eloBucket].midpoint;
     const capturedState = session.state;
-    clientRef.current
-      .selectMove(fen, elo, { oppoElo: elo, temperature: 0 })
+    // Pick the worker entry point based on the toggle. The MCTS path
+    // runs `core/mcts.search` inside the worker (one Maia forward pass
+    // per sim), so the main thread only sees a single round-trip per
+    // move regardless of how many sims we asked for.
+    const movePromise = useMcts
+      ? clientRef.current.searchMove(fen, elo, {
+          oppoElo: elo,
+          simulations: maiaSimulations,
+          cPuct: OPPONENT_CONFIG.cPuct,
+        })
+      : clientRef.current.selectMove(fen, elo, { oppoElo: elo, temperature: 0 });
+    movePromise
       .then(({ move, value, moveProbs }) => {
         moveInFlight.current = false;
         setMaiaThinking(false);
@@ -210,7 +231,7 @@ export default function PlayMaiaGame() {
         setMaiaThinking(false);
         setError(`Maia move failed: ${err instanceof Error ? err.message : String(err)}`);
       });
-  }, [session, playerColor, eloBucket]);
+  }, [session, playerColor, eloBucket, useMcts, maiaSimulations]);
 
   // On game end: route the USER's moves only into the imitator. Maia's
   // moves are never recorded anywhere — that's the whole point of this
@@ -331,6 +352,37 @@ export default function PlayMaiaGame() {
               </option>
             ))}
           </select>
+        </div>
+        <div style={{ marginBottom: '10px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', gap: '6px', alignItems: 'center', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={useMcts}
+              onChange={e => setUseMcts(e.target.checked)}
+            />
+            <strong>Use MCTS</strong>
+          </label>
+          <label style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: useMcts ? 'pointer' : 'not-allowed' }}>
+            <span style={{ color: useMcts ? undefined : '#aaa' }}>MCTS sims:</span>
+            <input
+              type="range"
+              min={1}
+              max={16}
+              step={1}
+              value={maiaSimulations}
+              onChange={e => setMaiaSimulations(Number(e.target.value))}
+              disabled={!useMcts}
+              style={{ width: '120px', opacity: useMcts ? 1 : 0.4 }}
+            />
+            <span style={{ fontFamily: 'monospace', minWidth: '2.5em', color: useMcts ? undefined : '#aaa' }}>
+              {maiaSimulations}
+            </span>
+          </label>
+        </div>
+        <div style={{ marginBottom: '10px', fontSize: '0.8em', color: '#666' }}>
+          {useMcts
+            ? 'MCTS on Maia is slow on the CPU/WASM backend — each sim is a full forward pass (~6-10s). The sims cap is intentionally small.'
+            : 'MCTS off — Maia picks its policy-head argmax, which is what its ELO calibration is targeted at.'}
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
           <button
