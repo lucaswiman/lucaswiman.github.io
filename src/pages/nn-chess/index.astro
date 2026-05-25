@@ -8,26 +8,23 @@ import Game from '../../../nn-chess/ui/Game.tsx';
     Play against a neural-network opponent that learns <em>solely</em> from the
     win/loss signal of games it plays against you — no opening books, no piece
     tables, no hand-coded evaluation. The opponent starts out terrible and
-    (hopefully) improves as it accumulates games. See the{' '}
+    (hopefully) improves as it accumulates games. Use the
+    <strong>Opponent</strong> dropdown below to switch to the player-imitator
+    (interpretability), Stockfish (calibrated weak), or the human-style{' '}
+    <a href="https://github.com/CSSLab/maia2">Maia-2</a> network — your moves
+    train the imitator in every mode; the opponent NN&apos;s replay buffer is
+    only touched when you play against it directly. See the{' '}
     <a href="https://github.com/lucaswiman/lucaswiman.github.io/blob/main/nn-chess/README.md">
       nn-chess README
     </a>{' '}
     for the full design: goals, architecture, roadmap, and the deliberate
-    constraints that keep the learning signal honest. There's also a{' '}
+    constraints that keep the learning signal honest. There&apos;s also a{' '}
     <a href="/nn-chess/mcts">technical write-up of how MCTS picks each move</a>{' '}
     with an interactive mate-in-2 walkthrough driven by your own networks.
   </p>
 
   <p>
     <a href="/nn-chess/sparring">Stockfish sparring →</a> — watch the opponent learn from automated games against Stockfish.
-    <br />
-    <a href="/nn-chess/play-imitator">Play the imitator →</a> — play directly against the user-imitator network (interpretability + faster imitator-training).
-  </p>
-
-  <p>
-    <a href="/nn-chess/play-maia">Play against Maia-2 →</a> — face the human-style{' '}
-    <a href="https://github.com/CSSLab/maia2">Maia-2</a> network at a chosen
-    strength (sparring partner only; your moves still train the imitator).
   </p>
 
   <div style="max-width: 620px; margin: 0 auto;">

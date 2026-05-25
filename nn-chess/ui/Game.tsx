@@ -24,6 +24,7 @@ import {
   sideToMove,
   outcome,
   toFen,
+  legalMoves,
 } from '../core/rules/index.js';
 import type { GameState, Move, Outcome } from '../core/rules/index.js';
 import { encodeState } from '../core/encoding/index.js';
@@ -57,10 +58,29 @@ import {
   savePersistedSession,
   type PersistedSession,
   type ColorPreference,
+  type OpponentKind,
 } from './session-persistence.js';
+import { MAIA_ELO_BUCKETS } from '../core/maia/index.js';
+import {
+  MaiaClient,
+  fetchMaiaWeights,
+  DEFAULT_MAIA_SOURCE,
+  type MaiaLoadProgress,
+} from './maia-client.js';
+import { StockfishEngine } from './stockfish-protocol.js';
 
 type PlayerColor = 'w' | 'b';
 type SetupId = 'standard' | 'custom' | string;
+
+// Engine load state for the heavyweight third-party opponents (Maia,
+// Stockfish). The lightweight opponents (the nn-chess opponent net and
+// the imitator) are always loaded alongside the page bundle, so they
+// don't go through this status machine.
+type EngineStatus =
+  | { phase: 'idle' }
+  | { phase: 'loading'; progress: MaiaLoadProgress | null }
+  | { phase: 'ready' }
+  | { phase: 'error'; message: string };
 
 interface GameSession {
   state: GameState;
@@ -71,6 +91,23 @@ interface GameSession {
   // session can store `startingFen + moves` instead of every per-move
   // feature tensor.
   startingFen: string;
+  // UCI of the most recent move, or null at the start of a game. Used
+  // to highlight the from/to squares on the board so the user can see
+  // what just moved without scrubbing the history.
+  lastMove: Move | null;
+}
+
+const OPPONENT_LABELS: Record<OpponentKind, string> = {
+  'opponent': 'Opponent NN (the one we\'re training)',
+  'imitator': 'Imitator (behaviour-clone of your moves)',
+  'stockfish': 'Stockfish (calibrated weak)',
+  'maia-2': 'Maia-2 (human-style, by ELO bucket)',
+};
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function sessionFromState(state: GameState): GameSession {
@@ -80,6 +117,7 @@ function sessionFromState(state: GameState): GameSession {
     over: false,
     finalOutcome: null,
     startingFen: toFen(state),
+    lastMove: null,
   };
 }
 
@@ -98,6 +136,32 @@ export default function Game() {
   const [error, setError] = useState<string | null>(null);
   const [opponentVersion, setOpponentVersion] = useState(0);
   const [lastSearch, setLastSearch] = useState<SearchResult | null>(null);
+  // Which engine is playing the other side. Defaults to the nn-chess
+  // opponent net — the one the rest of this page exists to train.
+  // Switching kinds mid-game just changes who plays the next move; it
+  // doesn't reset the position or the history.
+  const [opponentKind, setOpponentKind] = useState<OpponentKind>('opponent');
+  // Stockfish controls — kept separate from MCTS sims/cPuct because
+  // they configure a different engine entirely.
+  const [sfSkill, setSfSkill] = useState(5);
+  const [sfMovetimeMs, setSfMovetimeMs] = useState(100);
+  // Maia controls. ELO bucket 5 ≈ 1500. Maia uses its own MCTS budget
+  // because each sim is a full forward pass on WASM (~6-10s), so we
+  // cap sims low and default the toggle OFF — Maia's ELO calibration
+  // targets policy-head argmax, not search.
+  const [maiaEloBucket, setMaiaEloBucket] = useState(5);
+  const [maiaUseMcts, setMaiaUseMcts] = useState(false);
+  const [maiaSimulations, setMaiaSimulations] = useState(4);
+  // Engine status for the heavyweight third-party opponents. Maia is
+  // ~40 MiB so we surface download progress; Stockfish is small but
+  // still spun up lazily on first use.
+  const [maiaStatus, setMaiaStatus] = useState<EngineStatus>({ phase: 'idle' });
+  const [sfStatus, setSfStatus] = useState<EngineStatus>({ phase: 'idle' });
+  // Top-3 Maia readout for the last move (parallel to LastMoveMcts for
+  // the opponent net). Only populated when playing against Maia.
+  const [lastMaiaReadout, setLastMaiaReadout] = useState<
+    { move: Move; value: number; topMoves: Array<{ move: Move; prob: number }> } | null
+  >(null);
   // Default true: the brief asks for auto-batching on by default; the
   // persisted preference (loaded asynchronously below) overrides this
   // once it lands.
@@ -142,14 +206,89 @@ export default function Game() {
   // both the save having been initiated AND the user's preference.
   const autoBatchedRef = useRef<GameSession | null>(null);
 
+  // Lazy-loaded third-party engines. We hold onto them once spun up so
+  // toggling the opponent dropdown back to one we already initialised
+  // doesn't pay the load cost twice.
+  const maiaClientRef = useRef<MaiaClient | null>(null);
+  const sfRef = useRef<StockfishEngine | null>(null);
+
+  // Tear down third-party engines on unmount. Switching opponent kinds
+  // mid-session deliberately keeps them around — the user may switch
+  // back in the next game.
+  useEffect(() => {
+    return () => {
+      maiaClientRef.current?.dispose();
+      maiaClientRef.current = null;
+      sfRef.current?.dispose();
+      sfRef.current = null;
+    };
+  }, []);
+
   const applyStartingState = useCallback((state: GameState) => {
     opponentMoveInFlight.current = false;
     recordedRef.current = null;
     setOpponentThinking(false);
     setSession(sessionFromState(state));
     setLastSearch(null);
+    setLastMaiaReadout(null);
     setError(null);
   }, []);
+
+  // Lazily spin up the Maia worker. Cheap to call repeatedly: returns
+  // the existing client if one is already ready, only kicks off the
+  // 40 MiB blob fetch on the first call.
+  const ensureMaia = useCallback(async (): Promise<MaiaClient> => {
+    if (maiaClientRef.current) return maiaClientRef.current;
+    setMaiaStatus({ phase: 'loading', progress: null });
+    try {
+      const { blob, manifest } = await fetchMaiaWeights({
+        source: DEFAULT_MAIA_SOURCE,
+        storage,
+        onProgress: p => setMaiaStatus({ phase: 'loading', progress: p }),
+      });
+      const client = await MaiaClient.create(blob, manifest);
+      maiaClientRef.current = client;
+      setMaiaStatus({ phase: 'ready' });
+      return client;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setMaiaStatus({ phase: 'error', message });
+      throw err;
+    }
+  }, [storage]);
+
+  // Lazily spin up Stockfish. The lite-single-threaded build is ~7 MiB
+  // so the load is fast but still worth deferring until the user picks
+  // this opponent kind. Skill / movetime changes mid-session require
+  // tearing down the engine and recreating it with the new config.
+  const ensureStockfish = useCallback(async (): Promise<StockfishEngine> => {
+    if (sfRef.current) return sfRef.current;
+    setSfStatus({ phase: 'loading', progress: null });
+    try {
+      const engine = await StockfishEngine.create({
+        skill: sfSkill,
+        movetimeMs: sfMovetimeMs,
+      });
+      sfRef.current = engine;
+      setSfStatus({ phase: 'ready' });
+      return engine;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setSfStatus({ phase: 'error', message });
+      throw err;
+    }
+  }, [sfSkill, sfMovetimeMs]);
+
+  // When the user nudges Stockfish skill or movetime, drop the existing
+  // engine so the next move recreates it with the new config. The
+  // Stockfish UCI engine accepts `setoption` mid-life, but the wrapper
+  // bakes config in at construction — recreating is the simplest path.
+  useEffect(() => {
+    if (sfRef.current === null) return;
+    sfRef.current.dispose();
+    sfRef.current = null;
+    setSfStatus({ phase: 'idle' });
+  }, [sfSkill, sfMovetimeMs]);
 
   // Builds the starting state for `id` without sampling — used when the
   // color picker changes mid-game and we want to keep the current puzzle
@@ -333,6 +472,12 @@ export default function Game() {
             over: restored.over,
             finalOutcome: restored.finalOutcome,
             startingFen: restored.startingFen,
+            // The persisted-session blob stores moves but not the
+            // last-move highlight directly; recover it from the tail
+            // of the history. Empty histories restore as null.
+            lastMove: restored.history.length > 0
+              ? restored.history[restored.history.length - 1].move
+              : null,
           };
           setSession(newSession);
           setPlayerColor(restored.playerColor);
@@ -340,6 +485,7 @@ export default function Game() {
           setSetupId(restored.setupId);
           setCustomFen(restored.customFen);
           setCurrentPuzzle(restored.currentPuzzle);
+          setOpponentKind(restored.opponentKind);
           if (restored.over) {
             // The game already ended — either it was recorded in the
             // earlier session, or the tab was closed before the save
@@ -369,9 +515,10 @@ export default function Game() {
       currentPuzzle,
       startingFen: session.startingFen,
       moves: session.history.map(r => r.move),
+      opponentKind,
     };
     void savePersistedSession(storage, data);
-  }, [session, playerColor, colorPreference, setupId, customFen, currentPuzzle, sessionLoaded, storage]);
+  }, [session, playerColor, colorPreference, setupId, customFen, currentPuzzle, sessionLoaded, storage, opponentKind]);
 
   useEffect(() => {
     if (opponent === null) return;
@@ -381,32 +528,90 @@ export default function Game() {
     const currentSide = sideToMove(session.state);
     if (currentSide === playerColor) return;
 
+    // The imitator + Maia/Stockfish paths depend on resources that may
+    // not be loaded yet. Skip silently rather than erroring — the
+    // resource-load effects flip state on completion, which re-runs
+    // this effect.
+    if (opponentKind === 'imitator' && imitator === null) return;
+
     opponentMoveInFlight.current = true;
     setOpponentThinking(true);
 
     const capturedState = session.state;
+    const fen = toFen(capturedState);
 
-    // MCTS branch goes through Opponent.selectMove for its rich return
-    // shape (visit counts etc. consumed by the inspector). The
-    // policy-head branch reuses the generic selectMoveFromNet from
-    // core/move-selection; T=0 keeps it deterministic.
-    const moveSelection: Promise<{ move: Move; mctsResult: SearchResult | null }> = useMcts
-      ? opponent.selectMove(capturedState).then(r => ({
-          move: r.move,
-          mctsResult: { ...r, bestMove: r.move, mateInOneMoves: [] as Move[] },
-        }))
-      : selectMoveFromNet(opponent.net, capturedState, { temperature: 0 }).then(r => ({
-          move: r.move,
+    // Dispatch to the right backend. Each branch resolves to a UCI
+    // move plus optional MCTS/Maia readouts for the inspector panels.
+    type MoveOutcome = {
+      move: Move;
+      mctsResult: SearchResult | null;
+      maiaReadout: { value: number; topMoves: Array<{ move: Move; prob: number }> } | null;
+    };
+    let moveSelection: Promise<MoveOutcome>;
+    if (opponentKind === 'opponent') {
+      // MCTS branch keeps the rich SearchResult shape so InspectorPanel
+      // / LastMoveMcts can read visit counts. Policy-head branch
+      // intentionally clears `lastSearch` to a null sentinel.
+      moveSelection = useMcts
+        ? opponent.selectMove(capturedState).then(r => ({
+            move: r.move,
+            mctsResult: { ...r, bestMove: r.move, mateInOneMoves: [] as Move[] },
+            maiaReadout: null,
+          }))
+        : selectMoveFromNet(opponent.net, capturedState, { temperature: 0 }).then(r => ({
+            move: r.move,
+            mctsResult: null,
+            maiaReadout: null,
+          }));
+    } else if (opponentKind === 'imitator') {
+      moveSelection = imitator!.selectMove(capturedState, {
+        search: useMcts ? { simulations, cPuct } : undefined,
+        temperature: 0,
+      }).then(r => ({ move: r.move, mctsResult: null, maiaReadout: null }));
+    } else if (opponentKind === 'stockfish') {
+      moveSelection = ensureStockfish().then(sf => sf.bestMove(fen)).then(raw => {
+        // Stockfish may return a queen-promotion as `e7e8q`; that
+        // round-trips through our UCI move format. Validate against
+        // the rules module — if SF emits something illegal under our
+        // ruleset we fall back to the first legal move rather than
+        // hard-erroring out of an in-progress game.
+        const legal = legalMoves(capturedState);
+        const move: Move = legal.includes(raw) ? raw : legal[0];
+        return { move, mctsResult: null, maiaReadout: null };
+      });
+    } else {
+      // 'maia-2'
+      const elo = MAIA_ELO_BUCKETS[maiaEloBucket].midpoint;
+      const maiaCall = (client: MaiaClient) => maiaUseMcts
+        ? client.searchMove(fen, elo, {
+            oppoElo: elo,
+            simulations: maiaSimulations,
+            cPuct,
+          })
+        : client.selectMove(fen, elo, { oppoElo: elo, temperature: 0 });
+      moveSelection = ensureMaia().then(maiaCall).then(({ move, value, moveProbs }) => {
+        const top = Array.from(moveProbs.entries())
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3)
+          .map(([m, p]) => ({ move: m, prob: p }));
+        return {
+          move,
           mctsResult: null,
-        }));
+          maiaReadout: { value, topMoves: top },
+        };
+      });
+    }
 
-    moveSelection.then(({ move, mctsResult }) => {
+    moveSelection.then(({ move, mctsResult, maiaReadout }) => {
       opponentMoveInFlight.current = false;
 
-      // When MCTS is off `mctsResult` is null — clear `lastSearch` so
-      // `LastMoveMcts` / `InspectorPanel` render their existing "no
-      // search yet" placeholder instead of a misleading 0-visit table.
+      // When MCTS isn't applicable (or the engine doesn't expose visit
+      // counts) `mctsResult` is null; LastMoveMcts / InspectorPanel
+      // render their "no search yet" placeholder in that case.
       setLastSearch(mctsResult);
+      // Maia readout is parallel to the MCTS panel — only set when
+      // Maia produced this move, cleared otherwise.
+      setLastMaiaReadout(maiaReadout ? { move, ...maiaReadout } : null);
 
       const record: GameMoveRecord = {
         features: encodeState(capturedState),
@@ -428,6 +633,7 @@ export default function Game() {
           over: gameOver,
           finalOutcome: gameOver ? o : null,
           startingFen: prev.startingFen,
+          lastMove: move,
         };
       });
 
@@ -437,7 +643,11 @@ export default function Game() {
       setOpponentThinking(false);
       setError(`Opponent move failed: ${err instanceof Error ? err.message : String(err)}`);
     });
-  }, [opponent, session, playerColor, useMcts]);
+  }, [
+    opponent, imitator, session, playerColor, useMcts, simulations, cPuct,
+    opponentKind, maiaEloBucket, maiaUseMcts, maiaSimulations,
+    ensureMaia, ensureStockfish,
+  ]);
 
   useEffect(() => {
     if (!session.over) return;
@@ -446,17 +656,28 @@ export default function Game() {
     if (recordedRef.current === session) return;
 
     recordedRef.current = session;
-    opponent.recordGameResult(session.history, session.finalOutcome);
 
-    // Teach the player-imitator from the user's moves only. The
-    // opponent's moves don't belong in the imitator's training set —
-    // the imitator's whole purpose is to model the *user*.
+    // The opponent NN's replay buffer only receives games where the
+    // opponent NN actually played. Games against the imitator,
+    // Stockfish, or Maia leave it alone — those engines' moves aren't
+    // a reasonable training signal for the opponent's own policy.
+    const recordOpponentGame = opponentKind === 'opponent';
+    if (recordOpponentGame) {
+      opponent.recordGameResult(session.history, session.finalOutcome);
+    }
+
+    // The player-imitator trains on the user's moves from EVERY
+    // session, regardless of which engine was on the other side. The
+    // imitator's job is to model the user, and the user's moves are
+    // the user's moves whether they came against the opponent NN, the
+    // imitator itself, Stockfish, or Maia.
     if (imitator) {
       const userMoves = session.history.filter(r => r.sideToMove === playerColor);
       imitator.recordUserMoves(userMoves, session.finalOutcome);
     }
 
-    const savePromises: Promise<void>[] = [opponent.saveTo(storage)];
+    const savePromises: Promise<void>[] = [];
+    if (recordOpponentGame) savePromises.push(opponent.saveTo(storage));
     if (imitator) savePromises.push(imitator.saveTo(storage));
     const sessionSnapshot = session;
     Promise.all(savePromises)
@@ -479,7 +700,7 @@ export default function Game() {
       .catch(err => {
         setError(`Failed to save after game: ${err instanceof Error ? err.message : String(err)}`);
       });
-  }, [session, opponent, imitator, playerColor, storage, autoSelfPlay]);
+  }, [session, opponent, imitator, playerColor, storage, autoSelfPlay, opponentKind]);
 
   const handleMove = useCallback((nextState: GameState, move: Move) => {
     if (!opponentRef.current) return;
@@ -500,6 +721,7 @@ export default function Game() {
         over: gameOver,
         finalOutcome: gameOver ? o : null,
         startingFen: prev.startingFen,
+        lastMove: move,
       };
     });
   }, []);
@@ -661,9 +883,13 @@ export default function Game() {
   const interactive = isHumanTurn && !opponentThinking;
 
   const o = session.finalOutcome;
+  const opponentNoun = opponentKind === 'maia-2' ? 'Maia'
+    : opponentKind === 'stockfish' ? 'Stockfish'
+    : opponentKind === 'imitator' ? 'Imitator'
+    : 'Opponent';
   let outcomeText = '';
-  if (o === 'white-wins') outcomeText = playerColor === 'w' ? 'You win!' : 'Opponent wins!';
-  else if (o === 'black-wins') outcomeText = playerColor === 'b' ? 'You win!' : 'Opponent wins!';
+  if (o === 'white-wins') outcomeText = playerColor === 'w' ? 'You win!' : `${opponentNoun} wins!`;
+  else if (o === 'black-wins') outcomeText = playerColor === 'b' ? 'You win!' : `${opponentNoun} wins!`;
   else if (o === 'draw') outcomeText = 'Draw!';
 
   const activePreset = ENDGAME_PRESETS_BY_ID.get(setupId);
@@ -770,6 +996,24 @@ export default function Game() {
         </div>
       )}
 
+      <div style={{ marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong>Opponent:</strong>
+        <select
+          value={opponentKind}
+          onChange={e => setOpponentKind(e.target.value as OpponentKind)}
+          style={{ padding: '3px 6px' }}
+        >
+          {(Object.keys(OPPONENT_LABELS) as OpponentKind[]).map(k => (
+            <option key={k} value={k}>{OPPONENT_LABELS[k]}</option>
+          ))}
+        </select>
+        {opponentKind !== 'opponent' && (
+          <span style={{ fontSize: '0.85em', color: '#666' }}>
+            Your moves still train the imitator; the opponent NN&apos;s replay buffer is untouched.
+          </span>
+        )}
+      </div>
+
       <div style={{ marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center' }}>
         <strong>You play as:</strong>
         <label style={{ cursor: 'pointer' }}>
@@ -804,77 +1048,171 @@ export default function Game() {
         </label>
       </div>
 
-      <div style={{ marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
-        <strong>Strength:</strong>
-        <MctsToggle
-          useMcts={useMcts}
-          onUseMctsChange={setUseMcts}
-          simulations={simulations}
-          onSimulationsChange={setSimulations}
-          minSims={16}
-          maxSims={400}
-          step={16}
-          simsSuffix="sims/move"
-        />
-        <span style={{ fontSize: '0.9em', color: '#888' }}>|</span>
-        <label style={{ fontSize: '0.9em', color: useMcts ? '#555' : '#aaa', display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-            explore (cPuct):
-            <span
-              role="button"
-              aria-label="Help for cPuct"
-              style={{
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                width: '15px', height: '15px', borderRadius: '50%',
-                background: '#bbb', color: '#fff', fontSize: '0.7em', fontWeight: 'bold',
-                cursor: 'pointer', userSelect: 'none', position: 'relative', flexShrink: 0,
-              }}
-              onMouseEnter={() => setCPuctTipOpen(true)}
-              onMouseLeave={() => setCPuctTipOpen(false)}
-              onClick={() => setCPuctTipOpen(o => !o)}
-            >
-              ?
-              {cPuctTipOpen && (
-                <span style={{
-                  position: 'absolute', bottom: '120%', left: '50%',
-                  transform: 'translateX(-50%)',
-                  background: '#333', color: '#fff', fontSize: '0.95em',
-                  fontWeight: 'normal', lineHeight: '1.4',
-                  padding: '7px 10px', borderRadius: '5px',
-                  width: '240px', whiteSpace: 'normal',
-                  pointerEvents: 'none', zIndex: 10,
-                  boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
-                }}>
-                  PUCT exploration constant (AlphaZero default: 1.5).
-                  <br /><br />
-                  <strong>Lower</strong> → simulations concentrate on the highest-value line, searching deeper but narrower.
-                  <br /><br />
-                  <strong>Higher</strong> → simulations spread across more candidate moves, shallower but broader.
-                </span>
-              )}
-            </span>
-          </span>
-          <input
-            type="range"
-            min={0.5}
-            max={4.0}
-            step={0.25}
-            value={cPuct}
-            onChange={e => setCPuct(Number(e.target.value))}
-            disabled={!useMcts}
-            style={{ width: '100px', opacity: useMcts ? 1 : 0.4 }}
+      {(opponentKind === 'opponent' || opponentKind === 'imitator') && (
+        <div style={{ marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <strong>Strength:</strong>
+          <MctsToggle
+            useMcts={useMcts}
+            onUseMctsChange={setUseMcts}
+            simulations={simulations}
+            onSimulationsChange={setSimulations}
+            minSims={16}
+            maxSims={400}
+            step={16}
+            simsSuffix="sims/move"
           />
-          <span style={{ fontFamily: 'monospace' }}>{cPuct.toFixed(2)}</span>
-        </label>
-      </div>
+          <span style={{ fontSize: '0.9em', color: '#888' }}>|</span>
+          <label style={{ fontSize: '0.9em', color: useMcts ? '#555' : '#aaa', display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              explore (cPuct):
+              <span
+                role="button"
+                aria-label="Help for cPuct"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: '15px', height: '15px', borderRadius: '50%',
+                  background: '#bbb', color: '#fff', fontSize: '0.7em', fontWeight: 'bold',
+                  cursor: 'pointer', userSelect: 'none', position: 'relative', flexShrink: 0,
+                }}
+                onMouseEnter={() => setCPuctTipOpen(true)}
+                onMouseLeave={() => setCPuctTipOpen(false)}
+                onClick={() => setCPuctTipOpen(o => !o)}
+              >
+                ?
+                {cPuctTipOpen && (
+                  <span style={{
+                    position: 'absolute', bottom: '120%', left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: '#333', color: '#fff', fontSize: '0.95em',
+                    fontWeight: 'normal', lineHeight: '1.4',
+                    padding: '7px 10px', borderRadius: '5px',
+                    width: '240px', whiteSpace: 'normal',
+                    pointerEvents: 'none', zIndex: 10,
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+                  }}>
+                    PUCT exploration constant (AlphaZero default: 1.5).
+                    <br /><br />
+                    <strong>Lower</strong> → simulations concentrate on the highest-value line, searching deeper but narrower.
+                    <br /><br />
+                    <strong>Higher</strong> → simulations spread across more candidate moves, shallower but broader.
+                  </span>
+                )}
+              </span>
+            </span>
+            <input
+              type="range"
+              min={0.5}
+              max={4.0}
+              step={0.25}
+              value={cPuct}
+              onChange={e => setCPuct(Number(e.target.value))}
+              disabled={!useMcts}
+              style={{ width: '100px', opacity: useMcts ? 1 : 0.4 }}
+            />
+            <span style={{ fontFamily: 'monospace' }}>{cPuct.toFixed(2)}</span>
+          </label>
+        </div>
+      )}
+
+      {opponentKind === 'stockfish' && (
+        <div style={{ marginBottom: '12px', display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <strong>Stockfish:</strong>
+          <label style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            skill
+            <input
+              type="range"
+              min={0}
+              max={20}
+              value={sfSkill}
+              onChange={e => setSfSkill(Number(e.target.value))}
+              style={{ width: '120px' }}
+            />
+            <span style={{ fontFamily: 'monospace', minWidth: '2em' }}>{sfSkill}</span>
+          </label>
+          <label style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            movetime (ms)
+            <input
+              type="number"
+              min={10}
+              max={10000}
+              value={sfMovetimeMs}
+              onChange={e => setSfMovetimeMs(Number(e.target.value))}
+              style={{ width: '80px' }}
+            />
+          </label>
+          {sfStatus.phase === 'loading' && (
+            <span style={{ fontSize: '0.85em', color: '#666' }}>Loading Stockfish…</span>
+          )}
+          {sfStatus.phase === 'error' && (
+            <span style={{ fontSize: '0.85em', color: '#c00' }}>Stockfish error: {sfStatus.message}</span>
+          )}
+        </div>
+      )}
+
+      {opponentKind === 'maia-2' && (
+        <div style={{ marginBottom: '12px', display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <strong>Maia strength:</strong>
+          <select
+            value={maiaEloBucket}
+            onChange={e => setMaiaEloBucket(Number(e.target.value))}
+            style={{ padding: '3px 6px' }}
+          >
+            {MAIA_ELO_BUCKETS.map(b => (
+              <option key={b.id} value={b.id}>
+                {b.label} (≈ {b.midpoint})
+              </option>
+            ))}
+          </select>
+          <MctsToggle
+            useMcts={maiaUseMcts}
+            onUseMctsChange={setMaiaUseMcts}
+            simulations={maiaSimulations}
+            onSimulationsChange={setMaiaSimulations}
+            minSims={1}
+            maxSims={16}
+          />
+          <div style={{ flexBasis: '100%' }} />
+          <span style={{ fontSize: '0.8em', color: '#666' }}>
+            {maiaUseMcts
+              ? 'MCTS on Maia is slow on CPU/WASM — each sim is a full forward pass (~6-10s).'
+              : 'MCTS off — Maia uses its policy-head argmax, which is what its ELO calibration targets.'}
+          </span>
+          {maiaStatus.phase === 'loading' && (
+            <div style={{ flexBasis: '100%', fontSize: '0.85em', color: '#666' }}>
+              Loading Maia-2 weights…{' '}
+              {maiaStatus.progress && (
+                <>
+                  {fmtBytes(maiaStatus.progress.loaded)}
+                  {maiaStatus.progress.total > 0 && (
+                    <> / {fmtBytes(maiaStatus.progress.total)}
+                      {' '}
+                      ({((maiaStatus.progress.loaded / maiaStatus.progress.total) * 100).toFixed(1)}%)
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+          {maiaStatus.phase === 'error' && (
+            <div style={{ flexBasis: '100%', fontSize: '0.85em', color: '#c00' }}>
+              Failed to load Maia: {maiaStatus.message}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ marginBottom: '8px', minHeight: '24px' }}>
         {opponentThinking && (
-          <span style={{ color: '#666', fontStyle: 'italic' }}>Opponent thinking…</span>
+          <span style={{ color: '#666', fontStyle: 'italic' }}>
+            {opponentKind === 'maia-2' ? 'Maia thinking…'
+              : opponentKind === 'stockfish' ? 'Stockfish thinking…'
+              : opponentKind === 'imitator' ? 'Imitator thinking…'
+              : 'Opponent thinking…'}
+          </span>
         )}
         {!opponentThinking && !session.over && (
           <span>
-            {isHumanTurn ? 'Your turn' : 'Opponent to move'}
+            {isHumanTurn ? 'Your turn' : `${opponentNoun} to move`}
             {' — '}{currentSide === 'w' ? 'White' : 'Black'} to move
           </span>
         )}
@@ -885,9 +1223,32 @@ export default function Game() {
         interactive={interactive}
         onMove={handleMove}
         boardOrientation={humanIsWhite ? 'white' : 'black'}
+        lastMove={session.lastMove}
       />
 
-      <LastMoveMcts lastSearch={lastSearch} />
+      {opponentKind === 'opponent' && <LastMoveMcts lastSearch={lastSearch} />}
+
+      {opponentKind === 'maia-2' && lastMaiaReadout && (
+        <div style={{
+          marginTop: '12px',
+          padding: '8px 12px',
+          background: '#f5f5f5',
+          border: '1px solid #ddd',
+          borderRadius: '6px',
+          fontSize: '0.85em',
+          color: '#444',
+        }}>
+          <strong>Last Maia move:</strong> {lastMaiaReadout.move}{' '}
+          <span style={{ color: '#666' }}>
+            (value head: {lastMaiaReadout.value.toFixed(3)})
+          </span>
+          <br />
+          <strong>Maia&apos;s top candidates:</strong>{' '}
+          {lastMaiaReadout.topMoves
+            .map(m => `${m.move} (${(m.prob * 100).toFixed(1)}%)`)
+            .join(', ')}
+        </div>
+      )}
 
       {session.over && (
         <div
@@ -976,12 +1337,14 @@ export default function Game() {
 
       <TrainingLog entries={trainingLog.entries} onClear={trainingLog.clear} />
 
-      <InspectorPanel
-        opponent={opponent}
-        state={session.state}
-        lastSearch={lastSearch}
-        opponentVersion={opponentVersion}
-      />
+      {opponentKind === 'opponent' && (
+        <InspectorPanel
+          opponent={opponent}
+          state={session.state}
+          lastSearch={lastSearch}
+          opponentVersion={opponentVersion}
+        />
+      )}
 
       <details
         style={{
