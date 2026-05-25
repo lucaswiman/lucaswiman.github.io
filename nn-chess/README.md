@@ -69,7 +69,7 @@ visit-count sampling temperature. This mirrors how `core/selfplay`
 already drives the imitator and means the only project-approved
 heuristic ("checkmate is terminal") behaves identically across all
 surfaces. A raw-policy-head path is still available on
-`selectImitatorMove` for tests and for future interpretability views
+`selectMoveFromNet` (in `core/move-selection`) for tests and for future interpretability views
 that want to see what the policy says before MCTS smooths it out.
 Finished games on this page feed `imitator.recordUserMoves(...)` on the
 user's own moves only — the imitator's own moves are never routed back

@@ -14,6 +14,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Board from './Board.js';
+import MctsToggle from './MctsToggle.js';
 import {
   initialState,
   applyMove,
@@ -354,30 +355,14 @@ export default function PlayMaiaGame() {
           </select>
         </div>
         <div style={{ marginBottom: '10px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', gap: '6px', alignItems: 'center', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={useMcts}
-              onChange={e => setUseMcts(e.target.checked)}
-            />
-            <strong>Use MCTS</strong>
-          </label>
-          <label style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: useMcts ? 'pointer' : 'not-allowed' }}>
-            <span style={{ color: useMcts ? undefined : '#aaa' }}>MCTS sims:</span>
-            <input
-              type="range"
-              min={1}
-              max={16}
-              step={1}
-              value={maiaSimulations}
-              onChange={e => setMaiaSimulations(Number(e.target.value))}
-              disabled={!useMcts}
-              style={{ width: '120px', opacity: useMcts ? 1 : 0.4 }}
-            />
-            <span style={{ fontFamily: 'monospace', minWidth: '2.5em', color: useMcts ? undefined : '#aaa' }}>
-              {maiaSimulations}
-            </span>
-          </label>
+          <MctsToggle
+            useMcts={useMcts}
+            onUseMctsChange={setUseMcts}
+            simulations={maiaSimulations}
+            onSimulationsChange={setMaiaSimulations}
+            minSims={1}
+            maxSims={16}
+          />
         </div>
         <div style={{ marginBottom: '10px', fontSize: '0.8em', color: '#666' }}>
           {useMcts

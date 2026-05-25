@@ -12,7 +12,7 @@
 //     net providing priors and value. That matches how `core/selfplay`
 //     already drives the imitator and keeps the only project-approved
 //     heuristic ("checkmate is terminal") consistent across all
-//     surfaces. See `core/imitator/selectImitatorMove`.
+//     surfaces. See `core/move-selection/selectMoveFromNet`.
 //   - There's no training UI here: no opponent self-play, no Stockfish,
 //     no gradient-step controls. Training continues to happen on the
 //     main page; this route's only side-effect is appending to the
@@ -23,6 +23,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Board from './Board.js';
+import MctsToggle from './MctsToggle.js';
 import {
   initialState,
   applyMove,
@@ -82,7 +83,7 @@ export default function PlayImitatorGame() {
   const [simulations, setSimulations] = useState(OPPONENT_CONFIG.simulations);
   // "Use MCTS" toggle. Default on (today's behaviour). When off the
   // imitator picks straight from its policy head — that's already a
-  // first-class mode of `selectImitatorMove`, so we just omit `search`
+  // first-class mode of `selectMoveFromNet`, so we just omit `search`
   // and let temperature apply to the raw policy instead of visit counts.
   const [useMcts, setUseMcts] = useState(true);
   const [session, setSession] = useState<Session>(freshSession);
@@ -273,28 +274,14 @@ export default function PlayImitatorGame() {
       </div>
 
       <div style={{ marginBottom: '12px', display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
-        <label style={{ display: 'flex', gap: '6px', alignItems: 'center', cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={useMcts}
-            onChange={e => setUseMcts(e.target.checked)}
-          />
-          <strong>Use MCTS</strong>
-        </label>
-        <label style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: useMcts ? 'pointer' : 'not-allowed' }}>
-          <strong style={{ color: useMcts ? undefined : '#aaa' }}>MCTS sims:</strong>
-          <input
-            type="range"
-            min={1}
-            max={256}
-            step={1}
-            value={simulations}
-            onChange={e => setSimulations(Number(e.target.value))}
-            disabled={!useMcts}
-            style={{ width: '140px', opacity: useMcts ? 1 : 0.4 }}
-          />
-          <span style={{ fontFamily: 'monospace', minWidth: '3em', color: useMcts ? undefined : '#aaa' }}>{simulations}</span>
-        </label>
+        <MctsToggle
+          useMcts={useMcts}
+          onUseMctsChange={setUseMcts}
+          simulations={simulations}
+          onSimulationsChange={setSimulations}
+          minSims={1}
+          maxSims={256}
+        />
         <label style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: 'pointer' }}>
           <strong>Temperature:</strong>
           <input

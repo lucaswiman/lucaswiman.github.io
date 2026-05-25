@@ -51,7 +51,7 @@ export type MaiaRequest =
       /**
        * Visit-count sampling temperature.
        * 0 = argmax over visits; >0 samples ∝ N^(1/T). Mirrors the
-       * temperature semantics of `selectImitatorMove` with `search` set.
+       * temperature semantics of `selectMoveFromNet` with `search` set.
        */
       temperature?: number;
     };

@@ -30,7 +30,9 @@ import { encodeState } from '../core/encoding/index.js';
 import type { Opponent, GameMoveRecord } from '../core/opponent/index.js';
 import { legalMoveIndicesFor, mateInOneIndicesFor, OPPONENT_STORAGE_KEYS } from '../core/opponent/index.js';
 import type { PlayerImitator } from '../core/imitator/index.js';
-import { IMITATOR_STORAGE_KEYS, selectImitatorMove } from '../core/imitator/index.js';
+import { IMITATOR_STORAGE_KEYS } from '../core/imitator/index.js';
+import { selectMoveFromNet } from '../core/move-selection/index.js';
+import MctsToggle from './MctsToggle.js';
 import type { SearchResult } from '../core/mcts/index.js';
 import type { BlobStorage } from '../core/storage/index.js';
 import { getJson, putJson } from '../core/storage/index.js';
@@ -384,33 +386,27 @@ export default function Game() {
 
     const capturedState = session.state;
 
-    // Pick MCTS vs raw-policy-head based on the toggle. `selectImitatorMove`
-    // is generic over any ChessNet despite living in core/imitator —
-    // using it here gives the opponent a no-MCTS path without forking
-    // a second policy-head helper. T=0 keeps the no-MCTS branch
-    // deterministic; users who want variety should turn MCTS back on
-    // (per the brief there is no temperature slider on this page).
-    const moveSelection = useMcts
-      ? opponent.selectMove(capturedState)
-      : selectImitatorMove(opponent.net, capturedState, { temperature: 0 }).then(r => ({
+    // MCTS branch goes through Opponent.selectMove for its rich return
+    // shape (visit counts etc. consumed by the inspector). The
+    // policy-head branch reuses the generic selectMoveFromNet from
+    // core/move-selection; T=0 keeps it deterministic.
+    const moveSelection: Promise<{ move: Move; mctsResult: SearchResult | null }> = useMcts
+      ? opponent.selectMove(capturedState).then(r => ({
           move: r.move,
-          rootValue: 0,
-          visitCounts: new Map<Move, number>(),
-          priorPolicy: r.priors,
-          edgeValues: new Map<Move, number>(),
+          mctsResult: { ...r, bestMove: r.move, mateInOneMoves: [] as Move[] },
+        }))
+      : selectMoveFromNet(opponent.net, capturedState, { temperature: 0 }).then(r => ({
+          move: r.move,
+          mctsResult: null,
         }));
 
-    moveSelection.then(({ move, rootValue, visitCounts, priorPolicy, edgeValues }) => {
+    moveSelection.then(({ move, mctsResult }) => {
       opponentMoveInFlight.current = false;
 
-      // When MCTS is off the search panel is meaningless — clear it so
+      // When MCTS is off `mctsResult` is null — clear `lastSearch` so
       // `LastMoveMcts` / `InspectorPanel` render their existing "no
       // search yet" placeholder instead of a misleading 0-visit table.
-      if (useMcts) {
-        setLastSearch({ bestMove: move, rootValue, visitCounts, priorPolicy, edgeValues, mateInOneMoves: [] });
-      } else {
-        setLastSearch(null);
-      }
+      setLastSearch(mctsResult);
 
       const record: GameMoveRecord = {
         features: encodeState(capturedState),
@@ -810,25 +806,16 @@ export default function Game() {
 
       <div style={{ marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
         <strong>Strength:</strong>
-        <label style={{ fontSize: '0.9em', color: '#555', display: 'flex', gap: '6px', alignItems: 'center', cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={useMcts}
-            onChange={e => setUseMcts(e.target.checked)}
-          />
-          Use MCTS
-        </label>
-        <input
-          type="range"
-          min={16}
-          max={400}
+        <MctsToggle
+          useMcts={useMcts}
+          onUseMctsChange={setUseMcts}
+          simulations={simulations}
+          onSimulationsChange={setSimulations}
+          minSims={16}
+          maxSims={400}
           step={16}
-          value={simulations}
-          onChange={e => setSimulations(Number(e.target.value))}
-          disabled={!useMcts}
-          style={{ width: '120px', opacity: useMcts ? 1 : 0.4 }}
+          simsSuffix="sims/move"
         />
-        <span style={{ fontSize: '0.9em', color: useMcts ? '#555' : '#aaa' }}>{simulations} sims/move</span>
         <span style={{ fontSize: '0.9em', color: '#888' }}>|</span>
         <label style={{ fontSize: '0.9em', color: useMcts ? '#555' : '#aaa', display: 'flex', gap: '8px', alignItems: 'center' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
