@@ -5,7 +5,11 @@
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import * as tf from '@tensorflow/tfjs';
-import { createPlayerImitator, IMITATOR_STORAGE_KEYS } from './index.js';
+import {
+  createPlayerImitator,
+  selectImitatorMove,
+  IMITATOR_STORAGE_KEYS,
+} from './index.js';
 import { createReplayBuffer } from '../training/index.js';
 import { createMemoryStorage } from '../../adapters/storage-memory.js';
 import { buildImitationExamples, type GameMoveRecord } from '../opponent/index.js';
@@ -17,6 +21,11 @@ import {
 } from '../nn/index.js';
 import { FEATURE_COUNT } from '../encoding/index.js';
 import { policyIndexFromUci } from '../nn/index.js';
+import {
+  initialState,
+  fromFen,
+  legalMoves,
+} from '../rules/index.js';
 
 // Minimal ChessNet stand-in. Only the methods the imitator actually
 // calls (trainBatch, serialize) need to behave; everything else throws
@@ -151,6 +160,115 @@ describe('PlayerImitator', () => {
         IMITATOR_STORAGE_KEYS.WEIGHTS,
       ].sort(),
     );
+  });
+});
+
+// Mulberry32: tiny deterministic PRNG so temperature-sampling tests are
+// reproducible without dragging in a dependency.
+function makePrng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s += 0x6d2b79f5;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+describe('selectImitatorMove', () => {
+  beforeAll(async () => {
+    await tf.setBackend('cpu');
+    await tf.ready();
+  });
+
+  it('returns one of the legal moves for the starting position (greedy)', async () => {
+    const net = ChessNet.create({ seed: 11 });
+    try {
+      const state = initialState();
+      const { move, priors } = await selectImitatorMove(net, state);
+      const legal = new Set(legalMoves(state));
+      expect(legal.has(move)).toBe(true);
+      // Priors are over the legal moves only — same shape as policyFromNet.
+      for (const m of priors.keys()) expect(legal.has(m)).toBe(true);
+    } finally {
+      net.dispose();
+    }
+  });
+
+  it('greedy selection is deterministic across calls', async () => {
+    const net = ChessNet.create({ seed: 17 });
+    try {
+      const state = initialState();
+      const a = await selectImitatorMove(net, state);
+      const b = await selectImitatorMove(net, state);
+      expect(a.move).toBe(b.move);
+    } finally {
+      net.dispose();
+    }
+  });
+
+  it('returns the unique legal move when only one is available', async () => {
+    // White king h1 in check from a black queen on g2; the only legal
+    // escape is Kxg2.
+    const net = ChessNet.create({ seed: 3 });
+    try {
+      const state = fromFen('4k3/8/8/8/8/8/6q1/7K w - - 0 1');
+      const legal = legalMoves(state);
+      expect(legal.length).toBe(1);
+      expect(legal[0]).toBe('h1g2');
+      const { move } = await selectImitatorMove(net, state);
+      expect(move).toBe(legal[0]);
+    } finally {
+      net.dispose();
+    }
+  });
+
+  it('throws on a terminal position', async () => {
+    const net = ChessNet.create({ seed: 5 });
+    try {
+      // Fool's mate: black just played Qh4#, white is checkmated.
+      const terminal = fromFen(
+        'rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3',
+      );
+      await expect(selectImitatorMove(net, terminal)).rejects.toThrow();
+    } finally {
+      net.dispose();
+    }
+  });
+
+  it('temperature > 0 with a seeded rng samples a legal move reproducibly', async () => {
+    const net = ChessNet.create({ seed: 23 });
+    try {
+      const state = initialState();
+      const legal = new Set(legalMoves(state));
+      const first = await selectImitatorMove(net, state, {
+        temperature: 1,
+        rng: makePrng(99),
+      });
+      const second = await selectImitatorMove(net, state, {
+        temperature: 1,
+        rng: makePrng(99),
+      });
+      expect(legal.has(first.move)).toBe(true);
+      expect(first.move).toBe(second.move);
+    } finally {
+      net.dispose();
+    }
+  });
+
+  it('PlayerImitator.selectMove delegates to the underlying net', async () => {
+    const buf = createReplayBuffer(10);
+    const net = ChessNet.create({ seed: 31 });
+    try {
+      const imitator = createPlayerImitator({ net, replayBuffer: buf });
+      const state = initialState();
+      const viaInstance = await imitator.selectMove(state);
+      const viaFn = await selectImitatorMove(net, state);
+      expect(viaInstance.move).toBe(viaFn.move);
+    } finally {
+      net.dispose();
+    }
   });
 });
 

@@ -12,14 +12,15 @@
 // independently versioned via NN_VERSION.
 
 import type { GameMoveRecord } from '../opponent/index.js';
-import { buildImitationExamples } from '../opponent/index.js';
+import { buildImitationExamples, policyFromNet } from '../opponent/index.js';
 import {
   ChessNet,
   deserialize,
   NN_VERSION,
   type TrainResult,
 } from '../nn/index.js';
-import type { Outcome } from '../rules/index.js';
+import type { GameState, Move, Outcome } from '../rules/index.js';
+import { isTerminal, legalMoves } from '../rules/index.js';
 import {
   createReplayBuffer,
   deserializeReplayBuffer,
@@ -37,6 +38,84 @@ export const IMITATOR_STORAGE_KEYS = {
   META: 'imitator/meta',
 } as const;
 
+// ── selectImitatorMove ───────────────────────────────────────────────────────
+
+/**
+ * Pick a move directly from a net's policy head — no MCTS, no value-
+ * based reward search. The point is to ask the net "what would the user
+ * play here?" the same way the imitator was trained to answer.
+ *
+ * This is the imitator's "play yourself" move-selection function, used
+ * by the play-against-imitator UI. Reuses `policyFromNet` from
+ * core/opponent so legal-move masking + renormalization stays a single
+ * source of truth.
+ *
+ * `temperature = 0` (default): greedy argmax over the masked priors.
+ * Ties broken lexicographically by UCI string for determinism.
+ *
+ * `temperature > 0`: sample proportional to `P^(1/T)` over the legal
+ * moves, using `rng` (defaults to `Math.random`).
+ *
+ * Throws if `state` is terminal — callers should never reach here.
+ *
+ * Notes on heuristics: this function deliberately does NOT add any
+ * mate-in-1 override or rules-based search the way `core/opponent`'s
+ * `selectMove` does. The imitator's job is behaviour-cloning of the
+ * user; any "always seize the mate" behaviour must come from the
+ * imitator's policy head learning the corrective targets produced by
+ * `buildImitationExamples`, not from a heuristic baked into selection.
+ */
+export async function selectImitatorMove(
+  net: ChessNet,
+  state: GameState,
+  options: { temperature?: number; rng?: () => number } = {},
+): Promise<{ move: Move; priors: Map<Move, number> }> {
+  if (isTerminal(state)) {
+    throw new Error('selectImitatorMove: called on a terminal GameState');
+  }
+  const moves = legalMoves(state);
+  if (moves.length === 0) {
+    throw new Error('selectImitatorMove: no legal moves at non-terminal state');
+  }
+
+  const { priors } = await policyFromNet(net).evaluate(state);
+  const temperature = options.temperature ?? 0;
+
+  if (temperature === 0 || moves.length === 1) {
+    // Greedy: argmax of the masked prior, ties broken lex by UCI string.
+    let bestMove = moves[0];
+    let bestP = priors.get(bestMove) ?? 0;
+    for (const m of moves) {
+      const p = priors.get(m) ?? 0;
+      if (p > bestP || (p === bestP && m < bestMove)) {
+        bestP = p;
+        bestMove = m;
+      }
+    }
+    return { move: bestMove, priors };
+  }
+
+  // Temperature sampling: weight ∝ P^(1/T) over legal moves.
+  const invT = 1 / temperature;
+  const weights = moves.map(m => Math.pow(priors.get(m) ?? 0, invT));
+  const total = weights.reduce((a, b) => a + b, 0);
+  if (total === 0) {
+    // Every legal move had zero prior (e.g. a freshly-initialized net
+    // whose softmax collapsed onto illegal indices). Fall back to a
+    // uniform draw so the game keeps progressing.
+    const idx = Math.floor((options.rng ?? Math.random)() * moves.length);
+    return { move: moves[Math.min(idx, moves.length - 1)], priors };
+  }
+  const draw = (options.rng ?? Math.random)() * total;
+  let cumulative = 0;
+  for (let i = 0; i < moves.length; i++) {
+    cumulative += weights[i];
+    if (draw < cumulative) return { move: moves[i], priors };
+  }
+  // Floating-point rounding fallback.
+  return { move: moves[moves.length - 1], priors };
+}
+
 export interface PlayerImitator {
   /**
    * Add the user's moves from a finished game to the imitator's
@@ -45,6 +124,17 @@ export interface PlayerImitator {
    * user's side.
    */
   recordUserMoves(userMoves: GameMoveRecord[], finalOutcome: Outcome): void;
+
+  /**
+   * Pick a move from this imitator's policy head. Thin wrapper around
+   * `selectImitatorMove(net, state, …)` for callers that already hold a
+   * `PlayerImitator`. See `selectImitatorMove` for the temperature /
+   * tie-breaking semantics.
+   */
+  selectMove(
+    state: GameState,
+    options?: { temperature?: number; rng?: () => number },
+  ): Promise<{ move: Move; priors: Map<Move, number> }>;
 
   /**
    * One gradient step on a minibatch sampled from the replay buffer.
@@ -79,6 +169,12 @@ export function createPlayerImitator(
     replayBuffer.addAll(examples);
   };
 
+  const selectMove = (
+    state: GameState,
+    options: { temperature?: number; rng?: () => number } = {},
+  ): Promise<{ move: Move; priors: Map<Move, number> }> =>
+    selectImitatorMove(net, state, options);
+
   const trainStep = async (
     batchSize: number,
     rng?: () => number,
@@ -99,6 +195,7 @@ export function createPlayerImitator(
 
   return {
     recordUserMoves,
+    selectMove,
     trainStep,
     saveTo,
     get net() { return net; },
