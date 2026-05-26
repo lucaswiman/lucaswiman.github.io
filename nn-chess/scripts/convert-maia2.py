@@ -444,7 +444,15 @@ def main() -> int:
         "--ref-fen",
         type=str,
         default=None,
-        help="If supplied, also dump reference activations for this FEN",
+        help="If supplied, also dump reference activations for this FEN to reference.json",
+    )
+    ap.add_argument(
+        "--ref-fen-black",
+        type=str,
+        default=None,
+        help="If supplied, additionally dump a second fixture (reference_black.json) "
+             "for this black-to-move FEN. Exercises the encoder + policy mirror path, "
+             "which is otherwise uncovered by the parity test.",
     )
     ap.add_argument(
         "--ref-elo-self",
@@ -463,7 +471,7 @@ def main() -> int:
         type=Path,
         default=None,
         help="Where to write the reference-activation JSON. "
-             "Required if --ref-fen is set.",
+             "Required if --ref-fen or --ref-fen-black is set.",
     )
     args = ap.parse_args()
 
@@ -496,9 +504,11 @@ def main() -> int:
     print(f"wrote {manifest_path} ({len(manifest_entries)} tensors)")
     print(f"sha256: {sha}")
 
-    if args.ref_fen is not None:
+    if args.ref_fen is not None or args.ref_fen_black is not None:
         if args.fixtures_dir is None:
-            ap.error("--fixtures-dir is required when --ref-fen is supplied")
+            ap.error("--fixtures-dir is required when --ref-fen or --ref-fen-black is supplied")
+
+    if args.ref_fen is not None:
         ref_path = args.fixtures_dir / "reference.json"
         dump_reference(
             sd,
@@ -508,6 +518,19 @@ def main() -> int:
             ref_path,
         )
         print(f"wrote {ref_path}")
+
+    if args.ref_fen_black is not None:
+        if args.ref_fen_black.split(" ")[1] != "b":
+            ap.error("--ref-fen-black must be a black-to-move FEN (side-to-move field == 'b')")
+        ref_black_path = args.fixtures_dir / "reference_black.json"
+        dump_reference(
+            sd,
+            args.ref_fen_black,
+            args.ref_elo_self,
+            args.ref_elo_oppo,
+            ref_black_path,
+        )
+        print(f"wrote {ref_black_path}")
 
     return 0
 
