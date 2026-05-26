@@ -34,6 +34,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = join(__dirname, '__fixtures__');
 const MANIFEST_PATH = join(FIXTURES_DIR, 'manifest.json');
 const REFERENCE_PATH = join(FIXTURES_DIR, 'reference.json');
+const REFERENCE_BLACK_PATH = join(FIXTURES_DIR, 'reference_black.json');
 
 interface ReferenceFixture {
   fen: string;
@@ -88,132 +89,153 @@ function findWeightsPath(): string | null {
 
 const WEIGHTS_PATH = findWeightsPath();
 
-describe('Maia-2 forward pass parity', () => {
-  const haveWeights = WEIGHTS_PATH !== null;
-  // We can't conditionally skip the test, but we can short-circuit
-  // every assertion with a clear status message instead.
-  const itc = haveWeights ? it : it.skip;
+// Run the same set of parity assertions against a named fixture. The
+// black-to-move fixture lets the test exercise the encoder + policy
+// mirror path, which is otherwise uncovered.
+function runParitySuite(suiteName: string, fixturePath: string): void {
+  describe(suiteName, () => {
+    const haveWeights = WEIGHTS_PATH !== null;
+    const haveFixture = existsSync(fixturePath);
 
-  if (!haveWeights) {
-    it.skip(
-      `weights.bin not found (set MAIA2_WEIGHTS or run convert-maia2.py to /tmp/maia2_out)`,
-      () => {},
-    );
-    return;
-  }
-
-  const manifest: MaiaManifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf-8'));
-  const reference: ReferenceFixture = JSON.parse(readFileSync(REFERENCE_PATH, 'utf-8'));
-  const blob = readFileSync(WEIGHTS_PATH!);
-  const blobBytes = new Uint8Array(blob.buffer, blob.byteOffset, blob.byteLength);
-
-  // Each `it` builds a fresh forward-pass result. We could share state
-  // but the cost (~1-2s on CPU) is tolerable and isolation makes
-  // failures easier to read.
-  itc('matches the reference value head to within 1e-2', async () => {
-    await tf.setBackend('cpu');
-    const weights = loadMaiaWeights(blobBytes, manifest);
-    try {
-      const state = fromFen(reference.fen);
-      const { features } = encodeForMaia(state);
-      const pred = maiaForward(weights, features, {
-        eloSelf: eloToBucket(reference.elo_self),
-        eloOppo: eloToBucket(reference.elo_oppo),
-      });
-      expect(pred.value).toBeCloseTo(reference.value, 2);
-    } finally {
-      weights.dispose();
+    if (!haveWeights) {
+      it.skip(
+        `weights.bin not found (set MAIA2_WEIGHTS or run convert-maia2.py to /tmp/maia2_out)`,
+        () => {},
+      );
+      return;
     }
-  }, 30_000);
-
-  itc('matches the reference top-5 legal policy moves', async () => {
-    await tf.setBackend('cpu');
-    const weights = loadMaiaWeights(blobBytes, manifest);
-    try {
-      const state = fromFen(reference.fen);
-      const { features } = encodeForMaia(state);
-      const pred = maiaForward(weights, features, {
-        eloSelf: eloToBucket(reference.elo_self),
-        eloOppo: eloToBucket(reference.elo_oppo),
-      });
-      // Rank legal moves by our logits.
-      const legalIndices = reference.legal_indices;
-      const ranked = legalIndices
-        .map(i => ({ index: i, uci: MAIA_MOVES[i], logit: pred.policyLogits[i] }))
-        .sort((a, b) => b.logit - a.logit)
-        .slice(0, 5);
-      // Compare top-1; the next four should be the same set (order may
-      // shuffle for moves with near-identical logits).
-      expect(ranked[0].index).toBe(reference.policy_top5_legal[0].index);
-      const ourTop5Set = new Set(ranked.map(r => r.index));
-      const refTop5Set = new Set(reference.policy_top5_legal.map(r => r.index));
-      // At least 4 of 5 should overlap; fp16 rounding can rearrange the tail.
-      let overlap = 0;
-      for (const idx of ourTop5Set) if (refTop5Set.has(idx)) overlap++;
-      expect(overlap).toBeGreaterThanOrEqual(4);
-    } finally {
-      weights.dispose();
+    if (!haveFixture) {
+      it.skip(
+        `${fixturePath} not found (re-run convert-maia2.py with --ref-fen / --ref-fen-black)`,
+        () => {},
+      );
+      return;
     }
-  }, 30_000);
 
-  itc('captures the post-backbone activation tensor at the right scale', async () => {
-    await tf.setBackend('cpu');
-    const weights = loadMaiaWeights(blobBytes, manifest);
-    try {
-      const state = fromFen(reference.fen);
-      const { features } = encodeForMaia(state);
-      const out = new Map<MaiaActivationName, Float32Array>();
-      maiaForward(weights, features, {
-        eloSelf: eloToBucket(reference.elo_self),
-        eloOppo: eloToBucket(reference.elo_oppo),
-        collect: new Set<MaiaActivationName>(['backbone', 'pooled']),
-        out,
-      });
-      const bb = out.get('backbone')!;
-      const pooled = out.get('pooled')!;
-      const bbSummary = summarize(bb);
-      const pooledSummary = summarize(pooled);
-      // The fp16 storage + reduced precision in tf.js's WASM/CPU
-      // kernels can shift sums by a few % over 1000s of accumulated
-      // elements. We compare relative magnitudes rather than per-
-      // element identity; the top-5 + value tests above pin down the
-      // correctness of the head outputs.
-      expect(bbSummary.n).toBe(reference.backbone_summary.n);
-      expect(pooledSummary.n).toBe(reference.pooled_summary.n);
+    const manifest: MaiaManifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf-8'));
+    const reference: ReferenceFixture = JSON.parse(readFileSync(fixturePath, 'utf-8'));
+    const blob = readFileSync(WEIGHTS_PATH!);
+    const blobBytes = new Uint8Array(blob.buffer, blob.byteOffset, blob.byteLength);
 
-      const relErrSum =
-        Math.abs(bbSummary.abs_sum - reference.backbone_summary.abs_sum) /
-        Math.max(reference.backbone_summary.abs_sum, 1e-6);
-      expect(relErrSum).toBeLessThan(0.05);
+    // Each `it` builds a fresh forward-pass result. We could share state
+    // but the cost (~1-2s on CPU) is tolerable and isolation makes
+    // failures easier to read.
+    it('matches the reference value head to within 1e-2', async () => {
+      await tf.setBackend('cpu');
+      const weights = loadMaiaWeights(blobBytes, manifest);
+      try {
+        const state = fromFen(reference.fen);
+        const { features } = encodeForMaia(state);
+        const pred = maiaForward(weights, features, {
+          eloSelf: eloToBucket(reference.elo_self),
+          eloOppo: eloToBucket(reference.elo_oppo),
+        });
+        expect(pred.value).toBeCloseTo(reference.value, 2);
+      } finally {
+        weights.dispose();
+      }
+    }, 30_000);
 
-      const pooledRel =
-        Math.abs(pooledSummary.abs_sum - reference.pooled_summary.abs_sum) /
-        Math.max(reference.pooled_summary.abs_sum, 1e-6);
-      expect(pooledRel).toBeLessThan(0.05);
-    } finally {
-      weights.dispose();
-    }
-  }, 30_000);
+    it('matches the reference top-5 legal policy moves', async () => {
+      await tf.setBackend('cpu');
+      const weights = loadMaiaWeights(blobBytes, manifest);
+      try {
+        const state = fromFen(reference.fen);
+        const { features, mirrored } = encodeForMaia(state);
+        const pred = maiaForward(weights, features, {
+          eloSelf: eloToBucket(reference.elo_self),
+          eloOppo: eloToBucket(reference.elo_oppo),
+        });
+        // Sanity: the encoder's mirror decision matches the reference's.
+        // A mismatch here means the side-to-move side of the encoder
+        // disagrees with the Python reference and every downstream
+        // policy/value check is meaningless.
+        expect(mirrored).toBe(reference.mirrored);
+        // Rank legal moves by our logits. `legal_indices` is in Maia's
+        // (mirrored, when applicable) action-space frame — exactly the
+        // frame `policyLogits` is indexed by — so no extra mirroring is
+        // needed here.
+        const legalIndices = reference.legal_indices;
+        const ranked = legalIndices
+          .map(i => ({ index: i, uci: MAIA_MOVES[i], logit: pred.policyLogits[i] }))
+          .sort((a, b) => b.logit - a.logit)
+          .slice(0, 5);
+        // Compare top-1; the next four should be the same set (order may
+        // shuffle for moves with near-identical logits).
+        expect(ranked[0].index).toBe(reference.policy_top5_legal[0].index);
+        const ourTop5Set = new Set(ranked.map(r => r.index));
+        const refTop5Set = new Set(reference.policy_top5_legal.map(r => r.index));
+        // At least 4 of 5 should overlap; fp16 rounding can rearrange the tail.
+        let overlap = 0;
+        for (const idx of ourTop5Set) if (refTop5Set.has(idx)) overlap++;
+        expect(overlap).toBeGreaterThanOrEqual(4);
+      } finally {
+        weights.dispose();
+      }
+    }, 30_000);
 
-  itc('selects a legal move via MaiaEngine.selectMove', async () => {
-    await tf.setBackend('cpu');
-    const { MaiaEngine } = await import('./engine.js');
-    const weights = loadMaiaWeights(blobBytes, manifest);
-    const engine = new MaiaEngine(weights);
-    try {
-      const state = fromFen(reference.fen);
-      const result = engine.selectMove(state, { elo: reference.elo_self });
-      const legal = legalMoves(state);
-      expect(legal).toContain(result.move);
-      // moveProbs should sum to ≈ 1 over legal moves.
-      let s = 0;
-      for (const p of result.moveProbs.values()) s += p;
-      expect(s).toBeCloseTo(1, 4);
-    } finally {
-      engine.dispose();
-    }
-  }, 30_000);
-});
+    it('captures the post-backbone activation tensor at the right scale', async () => {
+      await tf.setBackend('cpu');
+      const weights = loadMaiaWeights(blobBytes, manifest);
+      try {
+        const state = fromFen(reference.fen);
+        const { features } = encodeForMaia(state);
+        const out = new Map<MaiaActivationName, Float32Array>();
+        maiaForward(weights, features, {
+          eloSelf: eloToBucket(reference.elo_self),
+          eloOppo: eloToBucket(reference.elo_oppo),
+          collect: new Set<MaiaActivationName>(['backbone', 'pooled']),
+          out,
+        });
+        const bb = out.get('backbone')!;
+        const pooled = out.get('pooled')!;
+        const bbSummary = summarize(bb);
+        const pooledSummary = summarize(pooled);
+        // The fp16 storage + reduced precision in tf.js's WASM/CPU
+        // kernels can shift sums by a few % over 1000s of accumulated
+        // elements. We compare relative magnitudes rather than per-
+        // element identity; the top-5 + value tests above pin down the
+        // correctness of the head outputs.
+        expect(bbSummary.n).toBe(reference.backbone_summary.n);
+        expect(pooledSummary.n).toBe(reference.pooled_summary.n);
+
+        const relErrSum =
+          Math.abs(bbSummary.abs_sum - reference.backbone_summary.abs_sum) /
+          Math.max(reference.backbone_summary.abs_sum, 1e-6);
+        expect(relErrSum).toBeLessThan(0.05);
+
+        const pooledRel =
+          Math.abs(pooledSummary.abs_sum - reference.pooled_summary.abs_sum) /
+          Math.max(reference.pooled_summary.abs_sum, 1e-6);
+        expect(pooledRel).toBeLessThan(0.05);
+      } finally {
+        weights.dispose();
+      }
+    }, 30_000);
+
+    it('selects a legal move via MaiaEngine.selectMove', async () => {
+      await tf.setBackend('cpu');
+      const { MaiaEngine } = await import('./engine.js');
+      const weights = loadMaiaWeights(blobBytes, manifest);
+      const engine = new MaiaEngine(weights);
+      try {
+        const state = fromFen(reference.fen);
+        const result = engine.selectMove(state, { elo: reference.elo_self });
+        const legal = legalMoves(state);
+        expect(legal).toContain(result.move);
+        // moveProbs should sum to ≈ 1 over legal moves.
+        let s = 0;
+        for (const p of result.moveProbs.values()) s += p;
+        expect(s).toBeCloseTo(1, 4);
+      } finally {
+        engine.dispose();
+      }
+    }, 30_000);
+  });
+}
+
+runParitySuite('Maia-2 forward pass parity (white-to-move)', REFERENCE_PATH);
+runParitySuite('Maia-2 forward pass parity (black-to-move, mirrored)', REFERENCE_BLACK_PATH);
 
 // Sanity-check that maiaPolicyIndex agrees with MAIA_MOVES for every
 // move in the reference's legal-indices set. Cheap and doesn't need

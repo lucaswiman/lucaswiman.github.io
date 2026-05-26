@@ -148,7 +148,7 @@ export default function Game() {
   // Maia controls. ELO bucket 5 ≈ 1500. Maia uses its own MCTS budget
   // because each sim is a full forward pass on WASM (~6-10s), so we
   // cap sims low and default the toggle OFF — Maia's ELO calibration
-  // targets policy-head argmax, not search.
+  // targets its policy head, not search.
   const [maiaEloBucket, setMaiaEloBucket] = useState(5);
   const [maiaUseMcts, setMaiaUseMcts] = useState(false);
   const [maiaSimulations, setMaiaSimulations] = useState(4);
@@ -582,13 +582,22 @@ export default function Game() {
     } else {
       // 'maia-2'
       const elo = MAIA_ELO_BUCKETS[maiaEloBucket].midpoint;
+      // Sample from Maia's policy distribution rather than taking the
+      // greedy argmax. Maia's top-1 collapses on under-represented
+      // opening branches (e.g. after 1.e4 Nf6 2.Nf3 it deterministically
+      // retreats Ng8 even at bucket 10 — verified against the PyTorch
+      // reference), and with temperature=0 the same wrong move recurs
+      // every time the position recurs, producing visible Nf6↔Ng8
+      // oscillation. temperature=1 = honest sampling from the policy
+      // softmax, which still picks the top-1 most of the time but
+      // breaks the deterministic loop on close calls.
       const maiaCall = (client: MaiaClient) => maiaUseMcts
         ? client.searchMove(fen, elo, {
             oppoElo: elo,
             simulations: maiaSimulations,
             cPuct,
           })
-        : client.selectMove(fen, elo, { oppoElo: elo, temperature: 0 });
+        : client.selectMove(fen, elo, { oppoElo: elo, temperature: 1 });
       moveSelection = ensureMaia().then(maiaCall).then(({ move, value, moveProbs }) => {
         const top = Array.from(moveProbs.entries())
           .sort((a, b) => b[1] - a[1])
@@ -1175,7 +1184,7 @@ export default function Game() {
           <span style={{ fontSize: '0.8em', color: '#666' }}>
             {maiaUseMcts
               ? 'MCTS on Maia is slow on CPU/WASM — each sim is a full forward pass (~6-10s).'
-              : 'MCTS off — Maia uses its policy-head argmax, which is what its ELO calibration targets.'}
+              : 'MCTS off — Maia samples from its policy distribution (the deterministic argmax loops on under-represented opening branches).'}
           </span>
           {maiaStatus.phase === 'loading' && (
             <div style={{ flexBasis: '100%', fontSize: '0.85em', color: '#666' }}>
