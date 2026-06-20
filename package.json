@@ -16,7 +16,7 @@
     "@astrojs/rss": "^4.0.0",
     "@tensorflow/tfjs": "^4.22.0",
     "@tensorflow/tfjs-backend-wasm": "^4.22.0",
-    "astro": "^5.5.0",
+    "astro": "^6.4.6",
     "chess.js": "^1.4.0",
     "react": "^19.2.6",
     "react-chessboard": "^5.10.0",
