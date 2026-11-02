@@ -1,2 +1,12 @@
+# Robots policy for lucaswiman.github.io.
+#
+# This file also governs the GitHub Pages project sites served under this
+# domain (e.g. /frontrun/ and /emend/), since crawlers only read robots.txt
+# from the host root.
+
 User-agent: *
+Allow: /
+Allow: /blog/
+Allow: /frontrun/
+Allow: /emend/
 Disallow: /health-notes/
