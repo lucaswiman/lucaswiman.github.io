@@ -1,2 +1,15 @@
+# Robots policy for lucaswiman.github.io.
+#
+# GitHub Pages serves project sites (e.g. /emend/, /frontrun/) under this
+# user-site domain, so this file is the only robots.txt crawlers will read for
+# them too. Per-project robots.txt files in those repos are ignored.
+
 User-agent: *
+Allow: /
 Disallow: /health-notes/
+# Debug builds of the frontrun docs (docs-debug.yml) — duplicate content.
+Disallow: /frontrun/debug/
+
+Sitemap: https://lucaswiman.github.io/sitemap-index.xml
+Sitemap: https://lucaswiman.github.io/emend/sitemap.xml
+Sitemap: https://lucaswiman.github.io/frontrun/sitemap.xml

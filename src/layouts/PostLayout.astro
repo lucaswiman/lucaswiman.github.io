@@ -2,11 +2,23 @@
 interface Props {
   title: string;
   date: Date;
+  description?: string;
 }
 
 import BaseLayout from './BaseLayout.astro';
 
-const { title, date } = Astro.props;
+const { title, date, description } = Astro.props;
+const canonical = new URL(Astro.url.pathname, Astro.site);
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'BlogPosting',
+  headline: title,
+  description,
+  datePublished: date.toISOString(),
+  url: canonical.href,
+  mainEntityOfPage: canonical.href,
+  author: { '@type': 'Person', name: 'Lucas Wiman', url: new URL('/about', Astro.site).href },
+};
 const formattedDate = date.toLocaleDateString('en-US', {
   year: 'numeric',
   month: 'long',
@@ -14,10 +26,11 @@ const formattedDate = date.toLocaleDateString('en-US', {
   timeZone: 'UTC',
 });
 ---
-<BaseLayout title={title}>
+<BaseLayout title={title} description={description} ogType="article" publishedTime={date}>
+  <script type="application/ld+json" slot="head" set:html={JSON.stringify(jsonLd)} />
   <article class="post h-entry" itemscope itemtype="http://schema.org/BlogPosting">
     <header class="post-header">
-      <h1 class="post-title p-name" itemprop="name headline">{title}</h1>
+      <h1 class="post-title p-name" itemprop="headline">{title}</h1>
       <p class="post-meta">
         <time class="dt-published" datetime={date.toISOString()} itemprop="datePublished">
           {formattedDate}
