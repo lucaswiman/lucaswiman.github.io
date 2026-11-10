@@ -1,6 +1,7 @@
 ---
 title: "Announcing Frontrun"
 date: 2026-03-01
+description: "Frontrun is a Python library for deterministic concurrency testing: it reproduces race conditions by controlling thread interleavings, with trace markers, bytecode fuzzing, and DPOR."
 ---
 
 ## tl;dr

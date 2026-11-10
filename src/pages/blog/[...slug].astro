@@ -1,6 +1,7 @@
 ---
 import PostLayout from '../../layouts/PostLayout.astro';
 import { getCollection, render } from 'astro:content';
+import { excerpt } from '../../lib/excerpt';
 
 export async function getStaticPaths() {
   const posts = await getCollection('blog');
@@ -12,7 +13,8 @@ export async function getStaticPaths() {
 
 const { post } = Astro.props;
 const { Content } = await render(post);
+const description = post.data.description ?? excerpt(post.body ?? '');
 ---
-<PostLayout title={post.data.title} date={post.data.date}>
+<PostLayout title={post.data.title} date={post.data.date} description={description}>
   <Content />
 </PostLayout>

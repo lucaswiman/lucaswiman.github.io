@@ -7,6 +7,8 @@ const blog = defineCollection({
     title: z.string(),
     date: z.date(),
     categories: z.string().optional(),
+    // Optional SEO summary; falls back to an excerpt of the post body.
+    description: z.string().optional(),
   }),
 });
 
